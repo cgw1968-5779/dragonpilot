@@ -241,7 +241,7 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
       _("Be ready to take over at any time"),
       _("Always keep hands on wheel and eyes on road"),
       AlertStatus.normal, AlertSize.mid,
-      Priority.LOWER, VisualAlert.none, AudibleAlert.none, 0., 0., 4.),
+      Priority.LOWER, VisualAlert.none, AudibleAlert.none, 0., 0., 0.),
   },
 
   EventName.startupMaster: {
@@ -249,7 +249,7 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
       _("WARNING: This branch is not tested"),
       _("Always keep hands on wheel and eyes on road"),
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.LOWER, VisualAlert.none, AudibleAlert.none, 0., 0., 4.),
+      Priority.LOWER, VisualAlert.none, AudibleAlert.none, 0., 0., 0.),
   },
 
   EventName.startupNoControl: {
@@ -354,7 +354,7 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
       _("openpilot will not brake while gas pressed"),
       "",
       AlertStatus.normal, AlertSize.small,
-      Priority.LOWEST, VisualAlert.none, AudibleAlert.none, .0, .0, .1, creation_delay=1.),
+      Priority.LOWEST, VisualAlert.none, AudibleAlert.none, .0, .0, .0, creation_delay=1.),
   },
 
   EventName.vehicleModelInvalid: {
@@ -372,7 +372,7 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
       _("Steering Temporarily Unavailable"),
       "",
       AlertStatus.userPrompt, AlertSize.small,
-      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.chimePrompt, 1., 1., 1.),
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.chimePrompt, 0., 0., 0.),
   },
 
   EventName.preDriverDistracted: {
@@ -505,10 +505,10 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
 
   EventName.steerSaturated: {
     ET.WARNING: Alert(
-      _("TAKE CONTROL"),
-      _("Turn Exceeds Steering Limit"),
+      _("控制方向盤"),
+      _("彎道超出方向盤自動控制範圍"),
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.chimePrompt, 1., 1., 1.),
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.none, 0., 1., 1.),
   },
 
   EventName.fanMalfunction: {
@@ -529,26 +529,26 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
 
   EventName.speedLimitActive: {
     ET.WARNING: Alert(
-      "Cruise set to speed limit",
+      "定速開始",
       "",
       AlertStatus.normal, AlertSize.small,
-      Priority.LOW, VisualAlert.none, AudibleAlert.chimePrompt, 1., 0., 2.),
+      Priority.LOW, VisualAlert.none, AudibleAlert.chimePrompt, 0., 0., 0.),
   },
 
   EventName.speedLimitDecrease: {
     ET.WARNING: Alert(
-      "Decreasing speed to match new speed limit",
-      "",
+      "偵測到較低速限",
+      "降速至新設定速限",
       AlertStatus.normal, AlertSize.small,
-      Priority.LOW, VisualAlert.none, AudibleAlert.chimePrompt, 1., 0., 2.),
+      Priority.LOW, VisualAlert.none, AudibleAlert.chimePrompt, 0., 0., 0.),
   },
 
   EventName.speedLimitIncrease: {
     ET.WARNING: Alert(
-      "Higher speed limit detected",
-      "Increasing vehicle speed after short delay",
+      "偵測到較高速限",
+      "開始增加速度至新速限",
       AlertStatus.normal, AlertSize.mid,
-      Priority.LOW, VisualAlert.none, AudibleAlert.chimePrompt, 1., 0., 2.),
+      Priority.LOW, VisualAlert.none, AudibleAlert.chimePrompt, 0., 0., 0.),
   },
 
   # ********** events that affect controls state transitions **********
@@ -597,10 +597,10 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
 
   EventName.steerTempUnavailable: {
     ET.WARNING: Alert(
-      _("TAKE CONTROL"),
-      _("Steering Temporarily Unavailable"),
+      _("控制方向盤"),
+      _("方向盤輔助暫時失效"),
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.chimeWarning1, .4, 2., 1.),
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.none, 0., 1., 1.),
     ET.NO_ENTRY: NoEntryAlert(_("Steering Temporarily Unavailable"),
                               duration_hud_alert=0.),
   },
@@ -868,14 +868,6 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
       Priority.LOW, VisualAlert.steerRequired, AudibleAlert.chimeWarning2, .1, .1, .1, alert_rate=0.75),
   },
 
-  EventName.manualSteeringRequired: {
-    ET.WARNING: Alert(
-      _("STEERING REQUIRED: Lane Keeping OFF"),
-      "",
-      AlertStatus.normal, AlertSize.small,
-      Priority.LOW, VisualAlert.none, AudibleAlert.none, .0, .1, .1, alert_rate=0.25),
-  },
-
   EventName.manualSteeringRequiredBlinkersOn: {
     ET.WARNING: Alert(
       _("STEERING REQUIRED: Blinkers ON"),
@@ -910,9 +902,9 @@ EVENTS: Dict[int, Dict[str, Union[Alert, Callable[[Any, messaging.SubMaster, boo
   },
   EventName.longControlDisabled: {
     ET.PERMANENT: Alert(
-      _("Steer Assist Active"),
+      _("方向盤輔助中"),
       _(""),
       AlertStatus.normal, AlertSize.small,
-      Priority.LOWER, VisualAlert.none, AudibleAlert.none,.4, 2., 0.2),
+      Priority.LOWER, VisualAlert.none, AudibleAlert.none,4, 0, 0.2),
   },
 }
