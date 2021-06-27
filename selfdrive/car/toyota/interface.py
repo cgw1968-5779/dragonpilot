@@ -207,8 +207,8 @@ class CarInterface(CarInterfaceBase):
 
       for fw in car_fw:
         if fw.ecu == "eps" and fw.fwVersion == b"8965B42170\x00\x00\x00\x00\x00\x00":
-          ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6], [0.1]]
-          ret.lateralTuning.pid.kf = 0.00007818594
+          ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6], [0.08]]
+          ret.lateralTuning.pid.kf = 0.00015637188
           break
 
     elif candidate == CAR.RAV4H_TSS2:
