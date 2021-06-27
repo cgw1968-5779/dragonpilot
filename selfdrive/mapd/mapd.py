@@ -46,7 +46,7 @@ class MapD():
     self._query_thread = None
     self._lock = threading.RLock()
 
-  def udpate_state(self, sm):
+  def update_state(self, sm):
     sock = 'controlsState'
     if not sm.updated[sock] or not sm.valid[sock]:
       return
@@ -244,7 +244,7 @@ def mapd_thread(sm=None, pm=None):
 
   while True:
     sm.update()
-    mapd.udpate_state(sm)
+    mapd.update_state(sm)
     mapd.update_gps(sm)
     mapd.updated_osm_data()
     mapd.update_route()
