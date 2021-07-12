@@ -3,7 +3,7 @@ def create_steer_command(packer, steer, steer_req, raw_cnt):
 
   values = {
     "STEER_REQUEST": steer_req,
-    "STEER_TORQUE_CMD": steer,
+    "STEER_TORQUE_CMD": steer if steer_req else 0,
     "COUNTER": raw_cnt,
     "SET_ME_1": 1,
   }
@@ -79,5 +79,22 @@ def create_ui_command(packer, steer, chime, left_line, right_line, left_lane_dep
     "REPEATED_BEEPS": 0,
     "TWO_BEEPS": chime,
     "LDA_ALERT": steer,
+  }
+  return packer.make_can_msg("LKAS_HUD", 0, values)
+
+def create_ui_command_off(packer):
+  values = {
+    "RIGHT_LINE": 0,
+    "LEFT_LINE": 0,
+    "BARRIERS" : 0,
+    "SET_ME_X0C": 0x0a,
+    "SET_ME_X2C": 0x34,
+    "SET_ME_X38": 0x00,
+    "SET_ME_X02": 0x12,
+    "SET_ME_X01": 0,
+    "SET_ME_X01_2": 1,
+    "REPEATED_BEEPS": 0,
+    "TWO_BEEPS": 0,
+    "LDA_ALERT": 0,
   }
   return packer.make_can_msg("LKAS_HUD", 0, values)
