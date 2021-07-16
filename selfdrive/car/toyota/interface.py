@@ -204,8 +204,8 @@ class CarInterface(CarInterfaceBase):
       #ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.15], [0.05]]
       ret.mass = 3370. * CV.LB_TO_KG + STD_CARGO_KG
       #ret.lateralTuning.pid.kf = 0.00004
-      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kpBP = [[0., 23.], [0., 23.]]
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6, 0.8], [0.6, 0.5]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kpBP = [[0., 22., 22.01], [0., 22., 22.01]]
+      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6, 0.6, 0.6], [0.1, 0.1, 0.5]]
       ret.lateralTuning.pid.kf = 0.00015707963
 
       #for fw in car_fw:
