@@ -1027,6 +1027,11 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   EventName.audioFeedback: {
     ET.PERMANENT: audio_feedback_alert,
   },
+
+  # dragonpilot: engage chime when ACC MAIN turns ALKA on
+  EventName.alkaEnable: {
+    ET.PERMANENT: EngagementAlert(AudibleAlert.engage),
+  },
 }
 
 
