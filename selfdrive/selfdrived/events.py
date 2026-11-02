@@ -378,6 +378,12 @@ def personality_changed_alert(CP: car.CarParams, CS: car.CarState, sm: messaging
   return NormalPermanentAlert(f"Driving Personality: {personality}", duration=1.5)
 
 
+def experimental_mode_switched_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  # dragonpilot: say which mode the distance-button hold switched to (tnpb3)
+  from dragonpilot.selfdrive.selfdrived.experimental_toggle import experimental_toggle_text
+  return NormalPermanentAlert(experimental_toggle_text(), duration=1.5)
+
+
 def invalid_lkas_setting_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
   text = "Toggle stock LKAS on or off to engage"
   if CP.brand == "tesla":
@@ -1035,6 +1041,10 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   EventName.alkaDisable: {
     ET.PERMANENT: EngagementAlert(AudibleAlert.disengage),
+  },
+
+  EventName.experimentalModeSwitched: {
+    ET.WARNING: experimental_mode_switched_alert,
   },
 }
 
