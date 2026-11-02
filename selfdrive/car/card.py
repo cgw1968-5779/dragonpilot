@@ -22,6 +22,7 @@ if "TICI_DOS" in os.environ:
 else:
   from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
+from dragonpilot.selfdrive.car.fixed_platform import fixed_platform_car_params
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 
 REPLAY = "REPLAY" in os.environ
@@ -99,7 +100,7 @@ class Car:
       num_pandas = len(messaging.recv_one_retry(self.sm.sock['pandaStates']).pandaStates)
 
       cached_params = None
-      cached_params_raw = self.params.get("CarParamsCache")
+      cached_params_raw = fixed_platform_car_params(self.params)  # dragonpilot hook
       if cached_params_raw is not None:
         with car.CarParams.from_bytes(cached_params_raw) as _cached_params:
           cached_params = _cached_params
