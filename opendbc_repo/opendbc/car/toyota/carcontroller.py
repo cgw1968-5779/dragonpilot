@@ -9,6 +9,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
+from opendbc.car.toyota.auto_hold import AutoBrakeHold, auto_hold_available
 from opendbc.car.toyota.values import CAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -88,6 +89,7 @@ class CarController(CarControllerBase):
     self.secoc_prev_reset_counter = 0
 
     self.doors_locked = False
+    self.auto_hold = AutoBrakeHold() if auto_hold_available(CP) else None  # dragonpilot hook
 
   def update(self, CC, CS, now_nanos):
     actuators = CC.actuators
@@ -333,6 +335,8 @@ class CarController(CarControllerBase):
       elif self.doors_locked and CS.out.gearShifter == PARK:
         can_sends.append(CanData(LOCK_UNLOCK_CAN_ID, UNLOCK_CMD, 0))
         self.doors_locked = False
+
+    can_sends += self.auto_hold.update(CS.auto_hold_inputs, CS.out, self.frame, self.packer, math.degrees(self.pitch.x)) if self.auto_hold is not None else []  # dragonpilot hook
 
     self.frame += 1
     return new_actuators, can_sends

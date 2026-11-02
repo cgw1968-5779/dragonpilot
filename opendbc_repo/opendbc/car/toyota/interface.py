@@ -5,6 +5,7 @@ from opendbc.car.toyota.radar_interface import RadarInterface
 from opendbc.car.toyota.values import Ecu, CAR, DBC, ToyotaFlags, CarControllerParams, TSS2_CAR, RADAR_ACC_CAR, MIN_ACC_SPEED, \
                                                   EPS_SCALE, ANGLE_CONTROL_CAR, ToyotaSafetyFlags, UNSUPPORTED_DSU_CAR, NO_DSU_CAR
 from opendbc.car.disable_ecu import disable_ecu
+from opendbc.car.toyota.auto_hold import auto_hold_available
 from opendbc.car.interfaces import CarInterfaceBase
 
 SteerControlType = structs.CarParams.SteerControlType
@@ -176,6 +177,8 @@ class CarInterface(CarInterfaceBase):
 
     if dp_params & structs.DPFlags.ToyotaTSS1SnG:
       ret.flags |= ToyotaFlags.TSS1_SNG.value
+
+    ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.AUTO_HOLD.value if auto_hold_available(ret) else 0  # dragonpilot hook
 
     return ret
 

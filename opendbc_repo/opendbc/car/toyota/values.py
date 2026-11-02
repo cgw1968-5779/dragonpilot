@@ -58,6 +58,7 @@ class ToyotaSafetyFlags(IntFlag):
   SECOC = (8 << 8)
   UNSUPPORTED_DSU = (16 << 8)  # dp - use DSU_CRUISE (0x365) for ACC main instead of PCM_CRUISE_2 (0x1D3)
   LOCK_CTRL = (32 << 8)
+  AUTO_HOLD = (64 << 8)  # dragonpilot - auto brake hold: panda lets openpilot's 0x344 replace the camera's while standing
 
 
 class ToyotaFlags(IntFlag):

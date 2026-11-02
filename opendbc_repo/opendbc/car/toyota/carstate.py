@@ -6,6 +6,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.toyota.drive_mode import drive_mode_from_gear_packet
+from opendbc.car.toyota.auto_hold import AutoHoldInputs, auto_hold_available, auto_hold_pt_messages, auto_hold_cam_messages
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, TSS2_CAR, RADAR_ACC_CAR, \
                                                   EPS_SCALE, UNSUPPORTED_DSU_CAR, SECOC_CAR
 
@@ -45,6 +46,7 @@ class CarState(CarStateBase):
 
     self.lkas_button = 0
     self.distance_button = 0
+    self.auto_hold_inputs = AutoHoldInputs() if auto_hold_available(CP) else None  # dragonpilot hook
 
     self.pcm_follow_distance = 0
 
@@ -238,6 +240,7 @@ class CarState(CarStateBase):
 
 
     ret.buttonEvents = buttonEvents
+    self.auto_hold_inputs.update(cp, cp_cam) if self.auto_hold_inputs is not None else None  # dragonpilot hook
 
     # dp - ALKA: Toyota requires main ON to use ACC/LKA, use main as switch
     self.lkas_on = ret.cruiseState.available
@@ -249,10 +252,11 @@ class CarState(CarStateBase):
     pt_messages = [
       ("BLINKERS_STATE", float('nan')),
     ]
+    pt_messages += auto_hold_pt_messages(CP)  # dragonpilot hook
 
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
-      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
+      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], auto_hold_cam_messages(CP), 2),  # dragonpilot hook
     }
 
     if CP.flags & ToyotaFlags.SDSU:
