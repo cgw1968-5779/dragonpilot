@@ -105,8 +105,7 @@ class Car:
         with car.CarParams.from_bytes(cached_params_raw) as _cached_params:
           cached_params = _cached_params
 
-      if self.params.get_bool("dp_lat_alka"):
-        dp_params |= structs.DPFlags.LatALKA
+      dp_params |= structs.DPFlags.LatALKA  # dragonpilot hook: ALKA always on (owner), dp_lat_alka toggle removed
 
       if self.params.get_bool("dp_toyota_door_auto_lock_unlock"):
         dp_params |= structs.DPFlags.ToyotaLockCtrl
