@@ -6,6 +6,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.toyota.drive_mode import drive_mode_from_gear_packet
+from opendbc.car.toyota.cluster_speed import cluster_speed, CLUSTER_HYST_GAP
 from opendbc.car.toyota.auto_hold import AutoHoldInputs, auto_hold_available, auto_hold_pt_messages, auto_hold_cam_messages
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, TSS2_CAR, RADAR_ACC_CAR, \
                                                   EPS_SCALE, UNSUPPORTED_DSU_CAR, SECOC_CAR
@@ -31,6 +32,7 @@ class CarState(CarStateBase):
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
     self.eps_torque_scale = EPS_SCALE[CP.carFingerprint] / 100.
     self.cluster_speed_hyst_gap = CV.KPH_TO_MS / 2.
+    self.cluster_speed_hyst_gap = CLUSTER_HYST_GAP  # dragonpilot hook
     self.cluster_min_speed = CV.KPH_TO_MS / 2.
 
     if CP.flags & ToyotaFlags.SECOC.value:
@@ -111,6 +113,7 @@ class CarState(CarStateBase):
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
     )
     ret.vEgoCluster = ret.vEgo * 1.015  # minimum of all the cars
+    ret.vEgoCluster = cluster_speed(ret.vEgo)  # dragonpilot hook
 
     ret.standstill = abs(ret.vEgoRaw) < 1e-3
 
