@@ -24,6 +24,7 @@ from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroa
 from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware import HARDWARE
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
+from dragonpilot.selfdrive.selfdrived.alka_chime import alka_chime_on_main
 
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ or os.getenv("LITE") is not None
@@ -231,6 +232,9 @@ class SelfdriveD:
         (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)
+
+      if alka_chime_on_main(self.alka, CS.cruiseState.available, self.CS_prev.cruiseState.available, self.enabled):  # dragonpilot hook
+        self.events.add(EventName.alkaEnable)
 
     # Create events for temperature, disk space, and memory
     if self.sm['deviceState'].thermalStatus >= ThermalStatus.overheated:

@@ -150,7 +150,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_dev_beep", {PERSISTENT, BOOL, "0"}},
     {"dp_dev_opview", {PERSISTENT, BOOL, "0"}},
     {"dp_dev_tethering", {PERSISTENT, BOOL, "0"}},
-    {"dp_lat_alka", {PERSISTENT, BOOL, "0"}},
+    {"dp_lat_alka", {PERSISTENT, BOOL, "1"}},
     {"dp_lat_offset_cm", {PERSISTENT, INT, "0"}},
     {"dp_lat_lca_speed", {PERSISTENT, INT, "20"}},
     {"dp_lat_lca_auto_sec", {PERSISTENT, FLOAT, "0.0"}},

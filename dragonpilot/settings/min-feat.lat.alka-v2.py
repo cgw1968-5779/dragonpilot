@@ -10,6 +10,6 @@ ITEMS = [
     "brands": ["toyota", "hyundai", "honda", "volkswagen", "subaru", "mazda", "nissan", "ford"],
     "flags": "PERSISTENT",
     "param_type": "BOOL",
-    "default": "0",
+    "default": "1",
   },
 ]
