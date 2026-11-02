@@ -7,6 +7,23 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
+# dragonpilot (dppb, Corolla Altis Hybrid, owner 2026-11-03): soft end of a stop.
+# The planner already eases toward the stop, but below ~10 km/h the Altis decel lags the command by ~0.5 s
+# (dppb routes 17f-188: best-fit lag 0.5 s, 0.1 s at 10-25 km/h), so a stop after a firmer middle (lead braked
+# a little) still ends at -0.8..-0.9 m/s^2 and the car lurches at the stop. The decel at the stop follows the
+# command ~0.6 s earlier almost 1:1 (7 stops). So when the time to the stop, from the actual speed and decel,
+# drops below SOFT_END_LAG + SOFT_END_RAMP, the command eases to SOFT_END_ACCEL (owner's Altis end value
+# at 0 km/h) and reaches it SOFT_END_LAG before the stop. Once easing starts it never firms again until the car
+# has stopped (no stop-go-stop). Only ever lighter than the planner, only in the last ~1 s, so the start and the
+# middle of every stop are unchanged.
+SOFT_END_ACCEL = -0.30  # m/s^2
+SOFT_END_LAG = 0.5      # s
+SOFT_END_RAMP = 0.5     # s, shortest easing time
+SOFT_END_MAX_RATE = 1.0  # m/s^3, easing never releases faster than this: a firmer brake starts easing earlier
+SOFT_END_MIN_DECEL = 0.3  # m/s^2, floor of the decel used for the time to the stop
+SOFT_END_RESET_V = 3.0  # m/s, a new stop can start easing again above this speed
+SOFT_END_URGENT = -1.5  # m/s^2, never ease while the planner asks for more than this (urgent stop)
+
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
 
@@ -52,6 +69,7 @@ class LongControl:
                              (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
+    self.soft_end_frac = 1.0
 
   def reset(self):
     self.pid.reset()
@@ -70,7 +88,8 @@ class LongControl:
 
     elif self.long_control_state == LongCtrlState.stopping:
       output_accel = self.last_output_accel
-      if output_accel > self.CP.stopAccel:
+      # dragonpilot: firm toward stopAccel only once stopped (holding); never add brake before the stop
+      if output_accel > self.CP.stopAccel and CS.standstill:
         output_accel = min(output_accel, 0.0)
         output_accel -= self.CP.stoppingDecelRate * DT_CTRL
       self.reset()
@@ -84,5 +103,23 @@ class LongControl:
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target)
 
+    output_accel = self.soft_stop_end(output_accel, a_target, CS)
+
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
+
+  def soft_stop_end(self, output_accel, a_target, CS):
+    # a new stop (or the lead moving off before we stopped) starts from scratch: no easing left over
+    if CS.vEgo > SOFT_END_RESET_V or output_accel >= SOFT_END_ACCEL or \
+       self.long_control_state not in (LongCtrlState.pid, LongCtrlState.stopping):
+      self.soft_end_frac = 1.0
+    if CS.standstill or output_accel >= SOFT_END_ACCEL or a_target < SOFT_END_URGENT or \
+       self.long_control_state not in (LongCtrlState.pid, LongCtrlState.stopping):
+      return output_accel
+    t_stop = CS.vEgo / max(-CS.aEgo, SOFT_END_MIN_DECEL)
+    ramp = max(SOFT_END_RAMP, (SOFT_END_ACCEL - output_accel) / SOFT_END_MAX_RATE)
+    self.soft_end_frac = min(self.soft_end_frac, float(np.clip((t_stop - SOFT_END_LAG) / ramp, 0.0, 1.0)))
+    soft = SOFT_END_ACCEL + (output_accel - SOFT_END_ACCEL) * self.soft_end_frac
+    # the easing itself never releases faster than SOFT_END_MAX_RATE from the last command (the planner's own release
+    # is left as it is: never firmer than the planner's output)
+    return max(output_accel, min(soft, self.last_output_accel + SOFT_END_MAX_RATE * DT_CTRL))
