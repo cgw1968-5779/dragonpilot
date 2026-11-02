@@ -5,6 +5,7 @@ from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
+from opendbc.car.toyota.drive_mode import drive_mode_from_gear_packet
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, TSS2_CAR, RADAR_ACC_CAR, \
                                                   EPS_SCALE, UNSUPPORTED_DSU_CAR, SECOC_CAR
 
@@ -97,6 +98,7 @@ class CarState(CarStateBase):
     else:
       ret.gasPressed = cp.vl["PCM_CRUISE"]["GAS_RELEASED"] == 0
       can_gear = int(cp.vl["GEAR_PACKET"]["GEAR"])
+      ret.driveMode = drive_mode_from_gear_packet(cp.vl["GEAR_PACKET"])  # dragonpilot hook
       if not self.CP.flags & ToyotaFlags.DISABLE_RADAR.value or self.dp_radar_filter:
         ret.stockAeb = bool(cp_acc.vl["PRE_COLLISION"]["PRECOLLISION_ACTIVE"] and cp_acc.vl["PRE_COLLISION"]["FORCE"] < -1e-5)
 
