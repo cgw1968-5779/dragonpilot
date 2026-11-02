@@ -1,0 +1,11 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-vscode.cpptools",
+    "elagil.pre-commit-helper",
+    "charliermarsh.ruff",
+    "JamiTech.simply-blame",
+    "k--kato.intellij-idea-keybindings",
+    "trinm1709.dracula-theme-from-intellij"
+  ]
+}
