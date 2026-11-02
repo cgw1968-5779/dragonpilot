@@ -68,6 +68,16 @@ static bool toyota_unsupported_dsu = false;
 // lock ctrl
 static bool toyota_lock_ctrl = false;
 
+// dp - auto brake hold (ported from sunnypilot, @AlexandreSato): while the car stands with ACC main on, cruise not
+// engaged and gas released, openpilot's PRE_COLLISION_2 (0x344) replaces the camera's to hold the brake
+static bool toyota_auto_hold = false;
+static bool toyota_cruise_engaged = false;  // PCM_CRUISE.CRUISE_ACTIVE
+static bool toyota_main_on = false;         // PCM_CRUISE_2.MAIN_ON (or DSU_CRUISE.MAIN_ON), independent of ALKA
+
+static bool toyota_auto_hold_window(void) {
+  return toyota_auto_hold && !vehicle_moving && !gas_pressed && toyota_main_on && !toyota_cruise_engaged;
+}
+
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
   int len = GET_LEN(msg);
   uint8_t checksum = (uint8_t)(msg->addr) + (uint8_t)((unsigned int)(msg->addr) >> 8U) + (uint8_t)(len);
@@ -140,6 +150,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       if (msg->addr == 0x176U) {
         bool cruise_engaged = GET_BIT(msg, 5U);  // PCM_CRUISE.CRUISE_ACTIVE
         pcm_cruise_check(cruise_engaged);
+        toyota_cruise_engaged = cruise_engaged;
       }
       if (msg->addr == 0x116U) {
         gas_pressed = msg->data[1] != 0U;  // GAS_PEDAL.GAS_PEDAL_USER
@@ -151,6 +162,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       if (msg->addr == 0x1D2U) {
         bool cruise_engaged = GET_BIT(msg, 5U);  // PCM_CRUISE.CRUISE_ACTIVE
         pcm_cruise_check(cruise_engaged);
+        toyota_cruise_engaged = cruise_engaged;
         gas_pressed = !GET_BIT(msg, 4U);  // PCM_CRUISE.GAS_RELEASED
       }
       if (!toyota_alt_brake && (msg->addr == 0x226U)) {
@@ -346,6 +358,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // dp - auto brake hold: 0x344 only inside the hold window (standing, gas released, main on, cruise not engaged)
+  if ((msg->addr == 0x344U) && toyota_auto_hold && !toyota_auto_hold_window()) {
+    tx = false;
+  }
+
   // UDS: Only tester present ("\x0F\x02\x3E\x00\x00\x00\x00\x00") allowed on diagnostics address
   // dp - lock_ctrl bypasses this restriction to allow any UDS message
   if ((msg->addr == 0x750U) && !toyota_lock_ctrl) {
@@ -401,6 +418,12 @@ static safety_config toyota_init(uint16_t param) {
 
   toyota_alt_brake = GET_FLAG(param, TOYOTA_PARAM_ALT_BRAKE);
   toyota_stock_longitudinal = GET_FLAG(param, TOYOTA_PARAM_STOCK_LONGITUDINAL);
+
+  // dp - auto brake hold (0x344 is only in the longitudinal TX lists)
+  const uint32_t TOYOTA_PARAM_AUTO_HOLD = 64UL << TOYOTA_PARAM_OFFSET;
+  toyota_auto_hold = GET_FLAG(param, TOYOTA_PARAM_AUTO_HOLD) && !toyota_stock_longitudinal && !toyota_secoc;
+  toyota_cruise_engaged = false;
+  toyota_main_on = false;
   toyota_lta = GET_FLAG(param, TOYOTA_PARAM_LTA);
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
@@ -466,6 +489,15 @@ static TxExtResult toyota_tx_ext_hook(const CANPacket_t *msg) {
 
 // dp - rx_ext hook for optional messages (placeholder)
 static void toyota_rx_ext_hook(const CANPacket_t *msg) {
+  // dp - auto brake hold needs ACC main whether or not ALKA is on
+  if (msg->bus == 0U) {
+    if (toyota_unsupported_dsu && (msg->addr == 0x365U)) {
+      toyota_main_on = GET_BIT(msg, 0U);
+    }
+    if (!toyota_unsupported_dsu && (msg->addr == 0x1D3U)) {
+      toyota_main_on = GET_BIT(msg, 15U);
+    }
+  }
   if (alka_allowed && ((alternative_experience & ALT_EXP_ALKA) != 0)) {
     if (toyota_unsupported_dsu) {
       // DSU_CRUISE (0x365) - Lexus IS, GS_F, RC and other DSU-based cars
@@ -483,12 +515,19 @@ static void toyota_rx_ext_hook(const CANPacket_t *msg) {
   }
 }
 
+// dp - auto brake hold: block the camera's PRE_COLLISION_2 only inside the hold window, where openpilot sends it
+// (passed through unchanged, or the hold request); everywhere else the camera's AEB message is forwarded as stock
+static bool toyota_fwd_hook(int bus_num, int addr) {
+  return (bus_num == 2) && (addr == 0x344) && toyota_auto_hold_window();
+}
+
 const safety_hooks toyota_hooks = {
   .init = toyota_init,
   .rx = toyota_rx_hook,
   .rx_ext = toyota_rx_ext_hook,
   .tx = toyota_tx_hook,
   .tx_ext = toyota_tx_ext_hook,
+  .fwd = toyota_fwd_hook,
   .get_checksum = toyota_get_checksum,
   .compute_checksum = toyota_compute_checksum,
   .get_quality_flag_valid = toyota_get_quality_flag_valid,

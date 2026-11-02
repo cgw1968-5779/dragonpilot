@@ -164,3 +164,37 @@ def toyota_checksum(address: int, sig, d: bytearray) -> int:
   for i in range(len(d) - 1):
     s += d[i]
   return s & 0xFF
+
+
+# dragonpilot: auto brake hold (auto_hold.py), ported from tnpb3
+def create_brake_hold_command(packer, frame, pre_collision_2, brake_hold_active, hold_decel=-1.0):
+  # forward PRE_COLLISION_2 when auto brake hold is not active
+  values = {s: pre_collision_2[s] for s in [
+    "DSS1GDRV",
+    "DS1STAT2",
+    "DS1STBK2",
+    "PCSWAR",
+    "PCSALM",
+    "PCSOPR",
+    "PCSABK",
+    "PBATRGR",
+    "PPTRGR",
+    "IBTRGR",
+    "CLEXTRGR",
+    "IRLT_REQ",
+    "BRKHLD",
+    "AVSTRGR",
+    "VGRSTRGR",
+    "PREFILL",
+    "PBRTRGR",
+    "PCSDIS",
+    "PBPREPMP",
+  ]}
+
+  if brake_hold_active:
+    values = {
+      "DSS1GDRV": hold_decel,  # m/s^2 (signed, 0.1 per count); the old magic 0x3FF packed to -1.0
+      "PBRTRGR": frame % 730 < 727,  # cut actuation for 3 frames
+    }
+
+  return packer.make_can_msg("PRE_COLLISION_2", 0, values)
