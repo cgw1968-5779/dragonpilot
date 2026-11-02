@@ -26,6 +26,7 @@ from openpilot.common.file_chunker import read_file_chunked, get_manifest_path
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.helpers import usbgpu_present, modeld_pkl_path, get_tg_input_devices
 from dragonpilot.selfdrive.controls.lib.road_edge_detector import RoadEdgeDetector
+from dragonpilot.selfdrive.controls.lib.lane_change_defaults import AUTO_LANE_CHANGE_SEC, ROAD_EDGE_DETECTION
 
 LITE = os.getenv("LITE") is not None
 
@@ -223,11 +224,11 @@ def main(demo=False):
   prev_action = log.ModelDataV2.Action()
 
   dp_lat_lca_speed = int(params.get("dp_lat_lca_speed"))
-  dp_lat_lca_auto_sec = float(params.get("dp_lat_lca_auto_sec"))
+  dp_lat_lca_auto_sec = AUTO_LANE_CHANGE_SEC  # dragonpilot hook: owner fixed 0.5 s (was the dp_lat_lca_auto_sec toggle)
   DH = DesireHelper(dp_lat_lca_speed=dp_lat_lca_speed, dp_lat_lca_auto_sec=dp_lat_lca_auto_sec)
 
   dp_dev_is_rhd = params.get_bool("dp_dev_is_rhd")
-  RED = RoadEdgeDetector(params.get_bool("dp_lat_road_edge_detection"))
+  RED = RoadEdgeDetector(ROAD_EDGE_DETECTION)  # dragonpilot hook: always on (was the dp_lat_road_edge_detection toggle)
 
   dp_lat_offset_cm = int(params.get("dp_lat_offset_cm") or 0)
 
