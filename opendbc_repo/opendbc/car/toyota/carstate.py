@@ -6,6 +6,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.toyota.drive_mode import drive_mode_from_gear_packet
+from opendbc.car.toyota.software_set_speed import CruiseStalk, software_set_speed, CLUTCH_FREQ
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, TSS2_CAR, RADAR_ACC_CAR, \
                                                   EPS_SCALE, UNSUPPORTED_DSU_CAR, SECOC_CAR
 
@@ -45,6 +46,7 @@ class CarState(CarStateBase):
 
     self.lkas_button = 0
     self.distance_button = 0
+    self.cruise_stalk = CruiseStalk() if software_set_speed(CP) else None  # dragonpilot hook
 
     self.pcm_follow_distance = 0
 
@@ -236,6 +238,7 @@ class CarState(CarStateBase):
       buttonEvents += create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
 
 
+    buttonEvents += self.cruise_stalk.update(cp) if self.cruise_stalk is not None else []  # dragonpilot hook
 
     ret.buttonEvents = buttonEvents
 
@@ -249,6 +252,7 @@ class CarState(CarStateBase):
     pt_messages = [
       ("BLINKERS_STATE", float('nan')),
     ]
+    pt_messages += [("CLUTCH", CLUTCH_FREQ)] if software_set_speed(CP) else []  # dragonpilot hook
 
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
