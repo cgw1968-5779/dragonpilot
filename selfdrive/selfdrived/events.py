@@ -1028,9 +1028,13 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.PERMANENT: audio_feedback_alert,
   },
 
-  # dragonpilot: engage chime when ACC MAIN turns ALKA on
+  # dragonpilot: ALKA chimes follow ACC MAIN (tnpb3 / MADS lkasEnable / lkasDisable)
   EventName.alkaEnable: {
     ET.PERMANENT: EngagementAlert(AudibleAlert.engage),
+  },
+
+  EventName.alkaDisable: {
+    ET.PERMANENT: EngagementAlert(AudibleAlert.disengage),
   },
 }
 
