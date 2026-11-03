@@ -6,6 +6,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.toyota.drive_mode import drive_mode_from_gear_packet
+from opendbc.car.toyota.hybrid_state import HybridState, hybrid_pt_messages
 from opendbc.car.toyota.software_set_speed import CruiseStalk, software_set_speed, CLUTCH_FREQ
 from opendbc.car.toyota.cluster_speed import cluster_speed, CLUSTER_HYST_GAP
 from opendbc.car.toyota.auto_hold import AutoHoldInputs, auto_hold_available, auto_hold_pt_messages, auto_hold_cam_messages
@@ -72,6 +73,7 @@ class CarState(CarStateBase):
     # * when comma device is not available, the DSU message can still communicate with ADAS Camera, and over to car.
     # * when comma device is active, CAN message of DSU and ADAS camera will the be blocked by Panda, only forward some CAN messages over to car (from CAN0).
     self.dp_dsu_bypass = self.CP.flags & ToyotaFlags.DSU_BYPASS.value
+    self.hybrid_state = HybridState(CP)  # dragonpilot hook
 
     from opendbc.car.toyota.zss import ZSS
     self.zss = ZSS(CP.flags)
@@ -251,6 +253,7 @@ class CarState(CarStateBase):
     # dp - ALKA: Toyota requires main ON to use ACC/LKA, use main as switch
     self.lkas_on = ret.cruiseState.available
 
+    self.hybrid_state.update(cp, ret)  # dragonpilot hook
     return ret
 
   @staticmethod
@@ -260,6 +263,7 @@ class CarState(CarStateBase):
     ]
     pt_messages += [("CLUTCH", CLUTCH_FREQ)] if software_set_speed(CP) else []  # dragonpilot hook
     pt_messages += auto_hold_pt_messages(CP)  # dragonpilot hook
+    pt_messages += hybrid_pt_messages(CP)  # dragonpilot hook
 
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
