@@ -18,6 +18,7 @@ from dragonpilot.selfdrive.controls.lib.acm import ACM
 from dragonpilot.selfdrive.controls.lib.aem import AEM
 from dragonpilot.selfdrive.controls.lib.apm import APM
 from dragonpilot.selfdrive.controls.lib.eco_ev import EcoEv
+from dragonpilot.selfdrive.controls.lib.cruise_decel import CruiseDecel
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -77,6 +78,7 @@ class LongitudinalPlanner:
     self.aem = AEM()
     self.apm = APM()
     self.eco_ev = EcoEv(dt)  # dragonpilot hook
+    self.cruise_decel = CruiseDecel()  # dragonpilot hook
 
   @staticmethod
   def parse_model(model_msg):
@@ -140,6 +142,7 @@ class LongitudinalPlanner:
       clipped_accel_coast_interp = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [accel_clip[1], clipped_accel_coast])
       accel_clip[1] = min(accel_clip[1], clipped_accel_coast_interp)
 
+    v_cruise = self.cruise_decel.update(sm['carState'].driveMode, v_ego, v_cruise, accel_coast if accel_coast < 0.0 else None, force_slow_decel or reset_state or self.mpc.source != LongitudinalPlanSource.cruise)  # dragonpilot hook
     if force_slow_decel:
       v_cruise = 0.0
 
