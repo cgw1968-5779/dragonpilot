@@ -16,6 +16,7 @@ def cs(v, a, standstill=False):
 def drive(a_target_fn, v0=8.0, a_car=-0.9, steps=3000, should_stop_v=0.0):
   """open-loop: the car decelerates at a_car; returns (v, out) per frame until it stops"""
   LC = lc.LongControl(CP)
+  LC.engage_t = 10.0  # engaged long ago: the engage onset (test_engage_onset.py) is not part of these stops
   v, outs = v0, []
   for k in range(steps):
     out = LC.update(True, cs(v, a_car if v > 0 else 0.0, standstill=v <= 0), a_target_fn(v), v < should_stop_v, LIM)
@@ -55,6 +56,7 @@ def test_light_planner_untouched():
 
 def test_reset_when_lead_moves_off_before_stopping():
   LC = lc.LongControl(CP)
+  LC.engage_t = 10.0  # engaged long ago: the engage onset (test_engage_onset.py) is not part of these stops
   for _ in range(50):  # crawling, nearly stopped, braking -> easing latched
     LC.update(True, cs(0.3, -0.6), -0.8, False, LIM)
   assert LC.soft_end_frac < 1.0
@@ -66,6 +68,7 @@ def test_reset_when_lead_moves_off_before_stopping():
 
 def test_stopping_state_does_not_add_brake_before_standstill():
   LC = lc.LongControl(CP)
+  LC.engage_t = 10.0  # engaged long ago: the engage onset (test_engage_onset.py) is not part of these stops
   LC.update(True, cs(0.5, -0.4), -0.4, False, LIM)
   first = LC.update(True, cs(0.2, -0.4), -0.4, True, LIM)  # stopping state, still rolling
   outs = [LC.update(True, cs(0.1, -0.4), -0.4, True, LIM) for _ in range(30)]

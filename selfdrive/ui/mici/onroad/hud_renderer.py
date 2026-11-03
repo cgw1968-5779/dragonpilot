@@ -9,6 +9,7 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
 from cereal import log
+from dragonpilot.selfdrive.ui.mici.dial_hud import DialHud
 
 EventName = log.OnroadEvent.EventName
 
@@ -126,6 +127,7 @@ class HudRenderer(Widget):
     self._wheel_y_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
 
     self._set_speed_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
+    self.dp_dial = DialHud()  # dragonpilot hook
 
   def set_wheel_critical_icon(self, critical: bool):
     """Set the wheel icon to critical or normal state."""
@@ -168,6 +170,7 @@ class HudRenderer(Widget):
     v_ego = v_ego_cluster if self.v_ego_cluster_seen else car_state.vEgo
     speed_conversion = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
     self.speed = max(0.0, v_ego * speed_conversion)
+    self.dp_dial.update(car_state)  # dragonpilot hook
 
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
@@ -224,6 +227,8 @@ class HudRenderer(Widget):
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
+    if self.dp_dial.active:
+      return self.dp_dial.draw(self, rect)  # dragonpilot hook
     alpha = self._set_speed_alpha_filter.update(0 < rl.get_time() - self._set_speed_changed_time < SET_SPEED_PERSISTENCE and
                                                 self._can_draw_top_icons and self._engaged)
     if alpha < 1e-2:
