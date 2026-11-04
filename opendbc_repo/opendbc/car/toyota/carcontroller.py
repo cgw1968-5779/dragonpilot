@@ -215,6 +215,10 @@ class CarController(CarControllerBase):
         # internal PCM gas command can get stuck unwinding from negative accel so we apply a generous rate limit
         pcm_accel_cmd = actuators.accel
         if CC.longActive:
+          # dragonpilot (owner 2026-11-05, launch behind a lead): at standstill the held brake (stopAccel) is released at
+          # once when the planner lets go - the car does not move, so nothing is felt; the drive side keeps the wind-up limit
+          if CS.out.standstill and pcm_accel_cmd > self.prev_accel and self.prev_accel < 0.0:  # dragonpilot hook
+            self.prev_accel = min(pcm_accel_cmd, 0.0)
           pcm_accel_cmd = rate_limit(pcm_accel_cmd, self.prev_accel, ACCEL_WINDDOWN_LIMIT, ACCEL_WINDUP_LIMIT)
         self.prev_accel = pcm_accel_cmd
 
