@@ -64,10 +64,10 @@ ENGAGE_HOLD_GAP = 3.3       # m
 ENGAGE_HOLD_LAG = 0.5       # s
 ENGAGE_HOLD_V_TAIL = 12.0   # km/h: below this the stop is the normal end's
 ENGAGE_HOLD_D_TAIL = 9.0    # m the normal end takes from ENGAGE_HOLD_V_TAIL
-ENGAGE_HOLD_FADE_V = [10.0, 15.0]  # km/h: no hold below the first, full above the second
+ENGAGE_HOLD_FADE_V = [12.0, 20.0]  # km/h: no hold below the first, full above the second (11-05: was 10-15)
 ENGAGE_HOLD_MAX = 0.6       # m/s^2 at most held beyond the planner
 ENGAGE_HOLD_UP = 2.0        # m/s^3
-ENGAGE_HOLD_DOWN = 1.0      # m/s^3
+ENGAGE_HOLD_DOWN = 0.5      # m/s^3 (11-05: was 1.0)
 
 # dragonpilot (dpcr, owner 2026-11-03): the end of a stop behind a stopped lead at tncr1's level. Owner: "the brake gets
 # heavier at 3-5 km/h, too much; tncr1's slight firming there is comfortable - make dpcr the same as tncr1, check it
