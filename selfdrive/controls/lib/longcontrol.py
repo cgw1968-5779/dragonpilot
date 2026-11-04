@@ -24,6 +24,20 @@ SOFT_END_MIN_DECEL = 0.3  # m/s^2, floor of the decel used for the time to the s
 SOFT_END_RESET_V = 3.0  # m/s, a new stop can start easing again above this speed
 SOFT_END_URGENT = -1.5  # m/s^2, never ease while the planner asks for more than this (urgent stop)
 
+# dragonpilot (dpcr, owner 2026-11-03; dppb port 2026-11-04): "at mid / low speed, the first 0.1 s of the brake on the first SET / RESUME press
+# should be softer". Engaging with a lead (or a set speed) that needs braking, the planner's target is applied at once
+# and carcontroller's 4 m/s^3 wind-down is the only limit: -0.4 m/s^2 after 0.1 s, which is felt as a bite. A brake
+# that starts within ENGAGE_ONSET_WINDOW of engaging now builds with a rising jerk: ENGAGE_ONSET_J0 at its start,
+# growing linearly to ENGAGE_ONSET_J1 (= the stock 4 m/s^3 limit) over ENGAGE_ONSET_T, after which nothing is changed.
+# -0.15 at 0.1 s, -0.4 at 0.2 s, -0.75 at 0.3 s (stock: -0.4 / -0.8 / -1.2): a -1.0 request is reached ~0.1 s later.
+# Dynamic only: it follows the request (a light request is reached in the soft part and is not touched), only ever
+# lighter than the planner, only for the first 0.3 s of the first brake after engaging; normal stops are unchanged.
+# Not tied to a speed: a brake right at engagement only happens at mid / low speed in practice.
+ENGAGE_ONSET_WINDOW = 1.0  # s after engaging in which a brake onset gets the soft start
+ENGAGE_ONSET_J0 = 1.0      # m/s^3 at the start of the brake
+ENGAGE_ONSET_J1 = 4.0      # m/s^3 at ENGAGE_ONSET_T (stock carcontroller wind-down limit)
+ENGAGE_ONSET_T = 0.3       # s
+
 # dragonpilot (dpcr, owner 2026-11-03): the end of a stop behind a stopped lead at tncr1's level. Owner: "the brake gets
 # heavier at 3-5 km/h, too much; tncr1's slight firming there is comfortable - make dpcr the same as tncr1, check it
 # against the old records". Real stops (11-03 dpcr route d2 vs 16 normal tncr1 stops 10-28/29, median): tncr1 SENT
@@ -127,6 +141,8 @@ class LongControl:
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
     self.soft_end_frac = 1.0
+    self.engage_t = 0.0  # s since engaging
+    self.onset_t: float | None = None  # s since the soft brake onset began (None: not in one)
     self.lead = None  # radarState.leadOne, set by controlsd every frame (None: no radarState)
 
   def reset(self):
@@ -163,6 +179,7 @@ class LongControl:
 
     output_accel = self.soft_stop_end(output_accel, a_target, CS)
     output_accel = self.stop_end_level(output_accel, a_target, CS)
+    output_accel = self.engage_onset(output_accel, CS)
 
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
@@ -208,3 +225,20 @@ class LongControl:
     # never firmer than the planner; easing at most STOP_LEVEL_RATE from the last command
     return max(output_accel, min(target, self.last_output_accel + STOP_LEVEL_RATE * DT_CTRL))
 
+  def engage_onset(self, output_accel, CS):
+    if self.long_control_state == LongCtrlState.off:
+      # off because the driver is on the gas (override) is not an engagement: releasing the gas gets no soft onset
+      self.engage_t, self.onset_t = (ENGAGE_ONSET_WINDOW + 1.0 if getattr(CS, "gasPressed", False) else 0.0), None
+      return output_accel
+    self.engage_t += DT_CTRL
+    if self.onset_t is None:
+      # the onset starts with the first frame that asks for more brake than the last one, below zero, within the window
+      if self.engage_t > ENGAGE_ONSET_WINDOW or CS.standstill or self.long_control_state != LongCtrlState.pid or \
+         output_accel >= min(self.last_output_accel, 0.0):
+        return output_accel
+      self.onset_t = 0.0
+    if self.onset_t >= ENGAGE_ONSET_T:
+      return output_accel  # done: stock limits from here on (onset_t stays, so only once per engagement)
+    jerk = ENGAGE_ONSET_J0 + (ENGAGE_ONSET_J1 - ENGAGE_ONSET_J0) * self.onset_t / ENGAGE_ONSET_T
+    self.onset_t += DT_CTRL
+    return max(output_accel, min(self.last_output_accel, 0.0) - jerk * DT_CTRL)
