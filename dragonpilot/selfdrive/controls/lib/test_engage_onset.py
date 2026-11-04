@@ -73,3 +73,52 @@ def test_gas_override_release_untouched():
   for _ in range(20):
     LC.update(False, gas, 0.0, False, LIM)  # controlsd: longActive False while the driver is on the gas
   assert LC.update(True, cs(), -1.0, False, LIM) == -1.0
+
+
+# dppb (owner 2026-11-04): after the soft start the brake keeps climbing linearly, and the firmest brake is held a
+# little longer behind a stopped lead so an engage stop ends at 3-3.5 m
+
+def lead(d, v=0.0):
+  return SimpleNamespace(status=True, dRel=d, vLead=v, aLeadK=0.0)
+
+
+def run_hold(plan, d_fn, v_fn, frames=600, lead_v=0.0, lead_on=True):
+  LC = lc.LongControl(CP)
+  for _ in range(10):
+    LC.lead = lead(d_fn(0), lead_v) if lead_on else None
+    LC.update(False, cs(v_fn(0)), 0.0, False, LIM)
+  outs = []
+  for k in range(frames):
+    LC.lead = lead(d_fn(k), lead_v) if lead_on else None
+    outs.append(LC.update(True, cs(v_fn(k)), plan(k), False, LIM))
+  return outs
+
+
+def test_keeps_climbing_linearly_after_the_soft_start():
+  outs = run(lambda k: -2.5)
+  assert -0.45 < at(outs, 0.2) < -0.35
+  assert -0.85 < at(outs, 0.3) < -0.75       # owner: -0.76
+  assert -1.65 < at(outs, 0.5) < -1.55       # the stock 4 m/s^3 cannot reach -1.7 at 0.5 s: it keeps climbing after
+  assert at(outs, 0.75) == -2.5
+
+
+def test_hold_only_behind_a_stopped_lead_and_never_deeper_than_the_peak():
+  # plan peaks at -2.5 then releases fast, at 40 km/h with a stopped lead 30 m ahead (needs the brake held)
+  plan = lambda k: -2.5 if k < 100 else min(-2.5 + (k - 100) * 0.02, -1.0)
+  outs = run_hold(plan, lambda k: 30.0, lambda k: 40 / 3.6)
+  assert min(outs) >= -2.5 - 1e-9                       # never deeper than the stop's own firmest request
+  assert any(o < plan(k) - 0.3 for k, o in enumerate(outs))  # held beyond the released plan
+  steps = [b - a for a, b in zip(outs[150:], outs[151:])]
+  assert max(steps) <= lc.ENGAGE_HOLD_DOWN * DT_CTRL + 0.02 * 1.0 + 1e-9  # lets go no faster than the plan + DOWN
+  # moving lead / no lead: nothing held (never firmer than the planner)
+  for kw in (dict(lead_v=5.0), dict(lead_on=False)):
+    outs = run_hold(plan, lambda k: 30.0, lambda k: 40 / 3.6, **kw)
+    assert all(o >= plan(k) - 1e-9 for k, o in enumerate(outs) if k > 80)
+
+
+def test_no_hold_at_low_speed_and_none_later():
+  plan = lambda k: -2.0 if k < 100 else -0.8
+  outs = run_hold(plan, lambda k: 10.0, lambda k: 9 / 3.6)  # 9 km/h: the normal end's
+  assert all(o >= plan(k) - 1e-9 for k, o in enumerate(outs) if k > 80)
+  outs = run_hold(plan, lambda k: 30.0, lambda k: 40 / 3.6, frames=1700)
+  assert outs[-1] == -0.8                                    # ENGAGE_HOLD_MAX_T after the onset: the plan as it is
