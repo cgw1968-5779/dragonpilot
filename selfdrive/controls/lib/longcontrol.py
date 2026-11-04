@@ -23,6 +23,16 @@ SOFT_END_MAX_RATE = 1.0  # m/s^3, easing never releases faster than this: a firm
 SOFT_END_MIN_DECEL = 0.3  # m/s^2, floor of the decel used for the time to the stop
 SOFT_END_RESET_V = 3.0  # m/s, a new stop can start easing again above this speed
 SOFT_END_URGENT = -1.5  # m/s^2, never ease while the planner asks for more than this (urgent stop)
+# dppb (owner 2026-11-04 night, 21:54:16 behind a BMW at a red light: 3.9 m at 2 km/h, eased to -0.30 4.4 s before the
+# stop; the Altis creep cancels a steady -0.30 at 1-3 km/h (steady cmd -0.30 -> aEgo -0.03, -0.36..-0.42 -> -0.32), so
+# the car rolled 2.1 m on to 1.8 m; same at 13:21 / 13:23): "-0.30 only in the last 0.3-0.5 s". Behind a stopped radar
+# lead, below SOFT_END_RESET_V, while the stop predicted from the actual speed and decel ends within SOFT_END_HOLD_GAP of
+# the lead and is still more than SOFT_END_LAG away, the easing (soft end, stop end level, or the planner's own) stops at SOFT_END_HOLD_ACCEL (the lightest command the Altis
+# still brakes on at 1-3 km/h) and a command already lighter is not released any further (held: never firmed). The last
+# step to -0.30 is taken in the last SOFT_END_LAG.
+SOFT_END_HOLD_ACCEL = -0.40  # m/s^2
+SOFT_END_HOLD_MIN_DECEL = 0.05  # m/s^2: floor of the decel for the hold's time to the stop
+SOFT_END_HOLD_GAP = 5.0  # m (radar dRel): only while the stop, predicted from the actual decel, ends closer than this
 
 # dragonpilot (dpcr, owner 2026-11-03; dppb port 2026-11-04): "at mid / low speed, the first 0.1 s of the brake on the
 # first SET / RESUME press should be softer". Engaging with a lead (or a set speed) that needs braking, the planner's
@@ -162,6 +172,8 @@ class LongControl:
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
     self.soft_end_frac = 1.0
+    self.end_hold = False  # the end is held (not released) this frame
+    self.end_zone = False  # this stop's end has been held
     self.engage_t = 0.0  # s since engaging
     self.onset_t: float | None = None  # s since the soft brake onset began (None: not in one)
     self.onset_done = False  # the onset ramp reached the request
@@ -204,14 +216,38 @@ class LongControl:
 
     output_accel = self.soft_stop_end(output_accel, a_target, CS)
     output_accel = self.stop_end_level(output_accel, a_target, CS)
+    output_accel = self.end_stop_hold(output_accel)
     output_accel = self.engage_onset(output_accel, CS)
 
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
 
   def soft_stop_end(self, output_accel, a_target, CS):
+    held = self.end_hold
+    out = self._soft_stop_end(output_accel, a_target, CS, held)
+    # the end of a stop behind a stopped lead: end_stop_hold (after stop_end_level) applies it. Only while the planner
+    # brakes: acceleration / re-acceleration is never touched
+    zone = not CS.standstill and CS.vEgo <= SOFT_END_RESET_V and a_target < 0.0 and \
+      self.long_control_state in (LongCtrlState.pid, LongCtrlState.stopping) and self._stopped_lead()
+    self.end_hold = zone and self._end_not_yet(CS)
+    self.end_zone = zone and (self.end_zone or self.end_hold)  # this stop has been held (until it is over)
+    return out
+
+  def end_stop_hold(self, output_accel):
+    # applied after both easings: a command firmer than the hold level is left as it is; a lighter one is eased toward
+    # SOFT_END_HOLD_ACCEL at most SOFT_END_MAX_RATE (or kept at the last command if that is already lighter): never firmer
+    # than the last command, never firmer than the easings' own result
+    if self.end_hold and output_accel > SOFT_END_HOLD_ACCEL:
+      return min(output_accel, max(min(self.last_output_accel + SOFT_END_MAX_RATE * DT_CTRL, SOFT_END_HOLD_ACCEL),
+                                   self.last_output_accel))
+    if self.end_zone and not self.end_hold and output_accel > SOFT_END_ACCEL:
+      # the last SOFT_END_LAG: to -0.30, as smooth as the easing, not lighter
+      return min(output_accel, max(self.last_output_accel + SOFT_END_MAX_RATE * DT_CTRL, SOFT_END_ACCEL))
+    return output_accel
+
+  def _soft_stop_end(self, output_accel, a_target, CS, held):  # the 11-03 soft end
     # a new stop (or the lead moving off before we stopped) starts from scratch: no easing left over
-    if CS.vEgo > SOFT_END_RESET_V or output_accel >= SOFT_END_ACCEL or \
+    if CS.vEgo > SOFT_END_RESET_V or (output_accel >= SOFT_END_ACCEL and not held) or \
        self.long_control_state not in (LongCtrlState.pid, LongCtrlState.stopping):
       self.soft_end_frac = 1.0
     if CS.standstill or output_accel >= SOFT_END_ACCEL or a_target < SOFT_END_URGENT or \
@@ -224,6 +260,17 @@ class LongControl:
     # the easing itself never releases faster than SOFT_END_MAX_RATE from the last command (the planner's own release
     # is left as it is: never firmer than the planner's output)
     return max(output_accel, min(soft, self.last_output_accel + SOFT_END_MAX_RATE * DT_CTRL))
+
+  def _stopped_lead(self):
+    lead = self.lead
+    return lead is not None and lead.status and lead.vLead < STOP_LEVEL_LEAD_V
+
+  def _end_not_yet(self, CS):
+    b = max(-CS.aEgo, SOFT_END_HOLD_MIN_DECEL)
+    if CS.vEgo / b <= SOFT_END_LAG:
+      return False
+    # only when this stop ends at this lead (predicted from the actual decel), not while still closing on a far one
+    return self.lead.dRel - CS.vEgo * SOFT_END_LAG - CS.vEgo ** 2 / (2.0 * b) < SOFT_END_HOLD_GAP
 
   def stop_end_level(self, output_accel, a_target, CS):
     lead = self.lead

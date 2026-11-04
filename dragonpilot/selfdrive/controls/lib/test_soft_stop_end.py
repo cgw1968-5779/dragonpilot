@@ -75,3 +75,56 @@ def test_stopping_state_does_not_add_brake_before_standstill():
   assert all(o >= first - 1e-9 for o in outs)
   held = [LC.update(True, cs(0.0, 0.0, standstill=True), 0.0, True, LIM) for _ in range(100)]
   assert held[-1] < held[0]  # once stopped it firms toward stopAccel to hold the car
+
+
+# dppb (owner 2026-11-04 night, 21:54:16): -0.30 only in the last ~0.5 s; before that the end eases no further than
+# SOFT_END_HOLD_ACCEL behind a stopped lead (the Altis creep cancels a steady -0.30 at 1-3 km/h)
+
+def creep_stop(lead_on=True, lead_v=0.0, plan=-0.9):
+  """the car decelerates while the command is firm, but with a -0.30-ish command it creeps (decel collapses)"""
+  LC = lc.LongControl(CP)
+  LC.engage_t = 10.0
+  v, outs = 1.2, []
+  for k in range(8000):
+    LC.lead = SimpleNamespace(status=True, dRel=4.0, vLead=lead_v, aLeadK=0.0) if lead_on else None
+    a_car = -0.05 if outs and outs[-1][1] > -0.36 else -0.5  # Altis: -0.30 is cancelled by the creep
+    out = LC.update(True, cs(v, a_car if v > 0 else 0.0, standstill=v <= 0), plan(v) if callable(plan) else plan, False, LIM)
+    outs.append((v, out))
+    v = max(0.0, v + a_car * DT_CTRL)
+    if v <= 0:
+      break
+  return outs
+
+
+def test_end_held_at_hold_level_until_the_last_lag():
+  outs = creep_stop()
+  moving = [(v, o) for v, o in outs if v > 0]
+  # once eased to the hold level, never lighter while more than SOFT_END_LAG from the stop (car decel 0.5)
+  reached = False
+  for v, o in moving:
+    reached = reached or o <= lc.SOFT_END_HOLD_ACCEL + 1e-9
+    if reached and v / 0.5 > lc.SOFT_END_LAG + 0.02:
+      assert o <= lc.SOFT_END_HOLD_ACCEL + 1e-9
+  assert reached
+  # never firmer frame to frame (item 0) and the car actually stops
+  for (_, a), (_, b) in zip(moving, moving[1:]):
+    assert b >= a - 1e-9
+  assert outs[-1][0] < 1e-6
+
+
+def test_planner_release_held_not_firmed():
+  # the planner drops to -0.22 at 2 km/h (it does not know the creep): eased no further than the hold level, never firmer
+  outs = creep_stop(plan=lambda v: -0.9 if v > 0.6 else -0.22)
+  moving = [o for v, o in outs if v > 0]
+  for a, b in zip(moving, moving[1:]):
+    assert b >= a - 1e-9
+  assert all(o <= lc.SOFT_END_HOLD_ACCEL + 1e-9 for v, o in outs if 0.3 < v < 0.6)
+
+
+def test_no_hold_without_a_stopped_lead():
+  held = creep_stop()
+  for kw in (dict(lead_on=False), dict(lead_v=3.0)):
+    outs = creep_stop(**kw)
+    # the plain soft end: lighter than the hold level while the held stop is still at it
+    assert any(o > lc.SOFT_END_HOLD_ACCEL + 0.03 for v, o in outs if v > 0.27)
+  assert all(o <= lc.SOFT_END_HOLD_ACCEL + 1e-9 for v, o in held if 0.27 < v < 0.5)
