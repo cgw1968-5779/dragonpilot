@@ -59,6 +59,21 @@ CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
 
+# dragonpilot (dppb, owner 2026-11-05): "start following 0.3 s after the lead moves; if the planner does not allow it,
+# change the planner". Stopped closer than STOP_DISTANCE (the stop end leaves the Altis ~3.5 m out), the MPC waited until
+# the lead had pulled out to STOP_DISTANCE: 1.1 s after the lead started (21:53:00), car moving ~2.2 s after it. So while
+# we are stopped and the radar lead has been moving away (vLead above LAUNCH_V for LAUNCH_T: radar noise with both
+# stopped is <= 0.33 m/s for 99.9 %, single spikes to 0.6), the gap we stopped at is taken as the stop distance (the lead
+# obstacle moves out by the shortfall), so the MPC follows the lead's own motion at once. Nothing changes while the lead
+# is stopped. Once we move the offset fades at LAUNCH_FADE (the lead pulls away faster), and at LAUNCH_FADE_STOPPED if
+# the lead stops again, so a queue that stops again is not followed closer.
+LAUNCH_V = 0.25             # m/s
+LAUNCH_T = 0.15             # s
+LAUNCH_FADE = 0.5           # m/s
+LAUNCH_FADE_STOPPED = 2.0   # m/s
+LAUNCH_EGO_V = 0.3          # m/s: "we are stopped"
+LAUNCH_EXTRA = 0.5          # m beyond the gap we stopped at, so a lead creeping off slowly is followed at once
+
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
     return 1.0
@@ -216,6 +231,8 @@ def gen_long_ocp():
 class LongitudinalMpc:
   def __init__(self, dt=DT_MDL):
     self.dt = dt
+    self.launch_t = 0.0
+    self.launch_offset = 0.0
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -313,6 +330,21 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
+  def launch_gap(self, lead, v_ego):
+    if not lead.status:
+      self.launch_t, self.launch_offset = 0.0, 0.0
+      return 0.0
+    if v_ego < LAUNCH_EGO_V and self.launch_offset == 0.0:
+      self.launch_t = self.launch_t + self.dt if lead.vLead > LAUNCH_V else 0.0
+      if self.launch_t >= LAUNCH_T and lead.dRel < STOP_DISTANCE:
+        self.launch_offset = STOP_DISTANCE - lead.dRel + LAUNCH_EXTRA
+    elif self.launch_offset > 0.0:
+      fade = LAUNCH_FADE_STOPPED if lead.vLead < LAUNCH_V else (LAUNCH_FADE if v_ego >= LAUNCH_EGO_V else 0.0)
+      self.launch_offset = max(self.launch_offset - fade * self.dt, 0.0)
+      if self.launch_offset == 0.0:
+        self.launch_t = 0.0
+    return self.launch_offset
+
   def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
     t_follow = get_T_FOLLOW(personality)
     v_ego = self.x0[1]
@@ -320,6 +352,7 @@ class LongitudinalMpc:
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)
+    lead_xv_0[:, 0] += self.launch_gap(radarstate.leadOne, v_ego)
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
