@@ -57,6 +57,15 @@ ENGAGE_ONSET_J0 = 1.0       # m/s^3 at the start of the brake
 ENGAGE_ONSET_J1 = 3.0       # m/s^3 at ENGAGE_ONSET_T
 ENGAGE_ONSET_T = 0.2        # s: the soft part
 ENGAGE_ONSET_J_STOCK = 4.0  # m/s^3 after it (stock carcontroller wind-down limit), until the request is reached
+
+# dppb (owner 2026-11-05, exception to "never lighter than the planner" approved): "when a car cuts in, start the brake
+# soft but climb quickly to the planner's force; keep it simple". 21:53:33 at 56 km/h, accelerating +0.6, a car cut in
+# 19 m ahead at 48 km/h and the brake felt too strong at the front. So a brake that starts after BRAKE_ONSET_COAST_T
+# without braking (accelerating or coasting: every cut-in) gets the same curve as the engage onset: -0.15 at 0.1 s,
+# -0.40 at 0.2 s, then the stock ENGAGE_ONSET_J_STOCK until the planner's request is reached. A planner that builds
+# slower is untouched.
+BRAKE_ONSET_FROM = -0.1      # m/s^2: "not braking" is a command at or above this
+BRAKE_ONSET_COAST_T = 0.5    # s not braking before a new onset
 ENGAGE_HOLD_MAX_T = 15.0    # s after the onset
 ENGAGE_HOLD_LEAD_V = 1.0    # m/s: lead counted as stopped below this
 ENGAGE_HOLD_LEAD_T = 0.5    # s the lead must have been stopped
@@ -180,6 +189,9 @@ class LongControl:
     self.hold = 0.0  # <= 0: brake held beyond the planner in this engage stop
     self.hold_peak = 0.0  # this engage stop's firmest planner request so far
     self.hold_lead_t = 0.0  # s the lead has been stopped
+    self.bo_t: float | None = None  # s since a brake onset (while driving) began
+    self.bo_ramp = 0.0
+    self.coast_t = 0.0  # s without braking
     self.lead = None  # radarState.leadOne, set by controlsd every frame (None: no radarState)
 
   def reset(self):
@@ -302,13 +314,14 @@ class LongControl:
       # off because the driver is on the gas (override) is not an engagement: releasing the gas gets no soft onset
       self.engage_t, self.onset_t = (ENGAGE_ONSET_WINDOW + 1.0 if getattr(CS, "gasPressed", False) else 0.0), None
       self.onset_done, self.hold, self.hold_peak, self.hold_lead_t = False, 0.0, 0.0, 0.0
+      self.bo_t, self.coast_t = None, 0.0
       return output_accel
     self.engage_t += DT_CTRL
     if self.onset_t is None:
       # the onset starts with the first frame that asks for more brake than the last one, below zero, within the window
       if self.engage_t > ENGAGE_ONSET_WINDOW or CS.standstill or self.long_control_state != LongCtrlState.pid or \
          output_accel >= min(self.last_output_accel, 0.0):
-        return output_accel
+        return self.brake_onset(output_accel, CS)
       self.onset_t = 0.0
     t = self.onset_t
     self.onset_t += DT_CTRL
@@ -318,7 +331,23 @@ class LongControl:
       if output_accel < ramp:
         return ramp
       self.onset_done = True  # request reached: the hold below from here on
-    return self.engage_hold(output_accel, CS)
+    return self.brake_onset(self.engage_hold(output_accel, CS), CS)
+
+  def brake_onset(self, output_accel, CS):
+    if self.bo_t is None:
+      self.coast_t = 0.0 if self.last_output_accel < BRAKE_ONSET_FROM else self.coast_t + DT_CTRL
+      if self.coast_t < BRAKE_ONSET_COAST_T or output_accel >= BRAKE_ONSET_FROM or CS.standstill or \
+         self.long_control_state != LongCtrlState.pid:
+        return output_accel
+      self.bo_t, self.bo_ramp = 0.0, min(self.last_output_accel, 0.0)
+    t = self.bo_t
+    self.bo_t += DT_CTRL
+    jerk = ENGAGE_ONSET_J0 + (ENGAGE_ONSET_J1 - ENGAGE_ONSET_J0) * t / ENGAGE_ONSET_T if t < ENGAGE_ONSET_T else ENGAGE_ONSET_J_STOCK
+    self.bo_ramp -= jerk * DT_CTRL
+    if output_accel < self.bo_ramp:
+      return self.bo_ramp
+    self.bo_t, self.coast_t = None, 0.0  # the planner's request is reached
+    return output_accel
 
   def engage_hold(self, output_accel, CS):
     lead = self.lead
