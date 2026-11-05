@@ -16,7 +16,19 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 # Cross end value at 0 km/h) and reaches it SOFT_END_LAG before the stop. Once easing starts it never firms again until the car
 # has stopped (no stop-go-stop). Only ever lighter than the planner, only in the last ~1 s, so the start and the
 # middle of every stop are unchanged.
-SOFT_END_ACCEL = -0.30  # m/s^2, Cross (owner 2026-11-05: trial at the Altis end value; -0.32 was confirmed smooth, -0.34 before)
+SOFT_END_ACCEL = -0.34  # m/s^2, Cross (owner 2026-11-05 night: back to -0.34, held from 1 km/h to the stop; -0.32/-0.30 were trials)
+# dpcr (owner 2026-11-05 night, routes 000000e0 21:30-21:33): "with -0.34 the force from 1 to 0 km/h must stay the same,
+# as on tncr1; dpcr lets go in the last 0.5 s". Measured: the command was still released after 1 km/h (-0.29 -> -0.27,
+# -0.25 at the stop; tncr1 sent -0.35 at 1 km/h, -0.30 at 0), because the soft end only eases TO its end value and the
+# planner's own end release (its target falls to -0.04, from ~1.5-2 km/h) passed straight through. So from END_HOLD_V
+# down to the stop the command may ease toward SOFT_END_ACCEL at most at SOFT_END_MAX_RATE and is then never released
+# further; a command already lighter than SOFT_END_ACCEL is kept where it is: constant force through 1 -> 0 km/h. It
+# only stops a release, it never adds brake (item 0).
+# Released when the planner wants to move again (a_target > END_HOLD_RELEASE_A: lead moving off before we stopped).
+END_HOLD_V = 2.0           # km/h: the planner's end release starts at ~1.5-2 km/h
+END_HOLD_RELEASE_A = 0.2   # m/s^2
+END_HOLD_T = 1.5           # s: only while the car really is stopping (time to the stop at the actual decel); crawling
+                           # behind a creeping lead (11-03 18:56:05: planner -0.19 at 1.6-1.9 km/h) lets go gradually
 SOFT_END_LAG = 0.6      # s, Cross
 SOFT_END_RAMP = 0.5     # s, shortest easing time
 SOFT_END_MAX_RATE = 1.0  # m/s^3, easing never releases faster than this: a firmer brake starts easing earlier
@@ -86,7 +98,7 @@ ENGAGE_HOLD_DOWN = 0.5      # m/s^3 (11-05: was 1.0)
 # gaps 18:53 4.6 -> 3.4, 19:47 4.5 -> 3.6, 19:54 4.1 -> 3.0, 19:57 3.2 -> 2.8, 20:42 3.3 -> 3.0 m; the other 12 stops
 # (urgent 18:43 included) identical. Same method as the soft end (no new layer); the lead comes from controlsd.
 STOP_LEVEL_V = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]                  # km/h
-STOP_LEVEL_A = [-0.30, -0.35, -0.37, -0.45, -0.57, -0.55, -0.57, -0.69, -0.93]  # m/s^2, tncr1 sent (median)
+STOP_LEVEL_A = [-0.34, -0.35, -0.37, -0.45, -0.57, -0.55, -0.57, -0.69, -0.93]  # m/s^2, tncr1 sent (median)
 STOP_LEVEL_V_MID = 10.0   # km/h: top of the level line
 STOP_LEVEL_V_ARM = 12.0   # km/h: from here down to STOP_LEVEL_V_MID it blends from the planner's request to the line
 STOP_LEVEL_GAP = 3.3      # m (radar dRel): the closest the eased stop may be predicted to end
@@ -169,6 +181,7 @@ class LongControl:
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
     self.soft_end_frac = 1.0
+    self.end_hold: float | None = None  # command held from END_HOLD_V to the stop
     self.engage_t = 0.0  # s since engaging
     self.onset_t: float | None = None  # s since the soft brake onset began (None: not in one)
     self.onset_done = False  # the onset ramp reached the request
@@ -214,6 +227,7 @@ class LongControl:
 
     output_accel = self.soft_stop_end(output_accel, a_target, CS)
     output_accel = self.stop_end_level(output_accel, a_target, CS)
+    output_accel = self.hold_stop_end(output_accel, a_target, CS)
     output_accel = self.engage_onset(output_accel, CS)
 
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
@@ -259,6 +273,26 @@ class LongControl:
       target = min(line, _cmd_for_decel(v_kmh, b))
     # never firmer than the planner; easing at most STOP_LEVEL_RATE from the last command
     return max(output_accel, min(target, self.last_output_accel + STOP_LEVEL_RATE * DT_CTRL))
+
+  def hold_stop_end(self, output_accel, a_target, CS):
+    """from END_HOLD_V to the stop: ease to SOFT_END_ACCEL at most at SOFT_END_MAX_RATE, then no further release"""
+    last = float(self.last_output_accel)
+    if CS.vEgo * 3.6 > END_HOLD_V or a_target > END_HOLD_RELEASE_A or CS.standstill or last >= 0.0 or \
+       self.long_control_state not in (LongCtrlState.pid, LongCtrlState.stopping):
+      self.end_hold = None  # stopped (the stopping state holds the car), moving off, not braking, or above END_HOLD_V
+      return output_accel
+    if CS.vEgo / max(-CS.aEgo, 0.01) <= END_HOLD_T:
+      # really stopping: the lightest command allowed now; a firmer one may still ease toward the end value, a lighter
+      # one is kept as it is
+      self.end_hold = min(last + SOFT_END_MAX_RATE * DT_CTRL, max(SOFT_END_ACCEL, last))
+    elif self.end_hold is not None:
+      # not stopping after all (crawling behind a creeping lead): let go of the hold, never faster than the soft end
+      self.end_hold += SOFT_END_MAX_RATE * DT_CTRL
+      if self.end_hold >= output_accel:
+        self.end_hold = None
+    if self.end_hold is None:
+      return output_accel
+    return min(output_accel, self.end_hold)
 
   def engage_onset(self, output_accel, CS):
     if self.long_control_state == LongCtrlState.off:
