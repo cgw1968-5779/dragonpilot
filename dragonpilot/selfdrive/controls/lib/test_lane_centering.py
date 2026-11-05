@@ -1,0 +1,87 @@
+import itertools
+import math
+import unittest
+from types import SimpleNamespace
+
+import numpy as np
+
+from openpilot.common.constants import CV
+from dragonpilot.selfdrive.controls.lib.lane_centering import (LaneCentering,
+                                                                                     LANE_CENTER_DEADBAND,
+                                                                                     LANE_CENTER_FADE_BP,
+                                                                                     LANE_CENTER_MAX_CURV)
+
+DT = 0.01
+
+
+_FRAME = itertools.count()
+
+
+def model(offset_left, heading_left=0.0, width=3.6, probs=(0.9, 0.9)):
+  """laneLines for a car `offset_left` m LEFT of the lane centre, pointing `heading_left` rad LEFT (model y+ = right)."""
+  x = np.arange(0.0, 30.0, 2.0)
+  centre = offset_left + math.tan(heading_left) * x   # pointing left: the lane centre runs off to the right ahead
+  ll = [SimpleNamespace(x=list(x), y=list(centre - width / 2 + 3.0)), SimpleNamespace(x=list(x), y=list(centre - width / 2)),
+        SimpleNamespace(x=list(x), y=list(centre + width / 2)), SimpleNamespace(x=list(x), y=list(centre + width / 2 + 3.0))]
+  # a unique frameId like a real modelV2 message: LaneCentering caches its lane fits per (id, frameId), and a
+  # recycled id() of a freed test object must not hit a stale cache entry
+  return SimpleNamespace(laneLines=ll, laneLineProbs=[0.1, probs[0], probs[1], 0.1], frameId=next(_FRAME))
+
+
+class TestLaneCentering(unittest.TestCase):
+  def test_sign_and_fade(self):
+    v = 110 * CV.KPH_TO_MS
+    lc = LaneCentering(DT)
+    for _ in range(300):
+      c = lc.update(model(0.3), v, True, False)
+    self.assertGreater(c, 0.0)                       # car left of centre -> positive (right) curvature
+    self.assertLessEqual(c, LANE_CENTER_MAX_CURV)
+    lc2 = LaneCentering(DT)
+    for _ in range(300):
+      c2 = lc2.update(model(-0.3), v, True, False)
+    self.assertAlmostEqual(c2, -c, places=6)         # symmetric
+    lc3 = LaneCentering(DT)
+    for _ in range(300):
+      c3 = lc3.update(model(0.3), 60 * CV.KPH_TO_MS, True, False)
+    self.assertEqual(c3, 0.0)                        # below the 70 km/h fade-in: no correction at all
+    self.assertAlmostEqual(LANE_CENTER_FADE_BP[0], 70 * CV.KPH_TO_MS, delta=0.1)
+
+  def test_deadband_and_lost_lines_wind_back(self):
+    v = 110 * CV.KPH_TO_MS
+    lc = LaneCentering(DT)
+    for _ in range(300):
+      c = lc.update(model(LANE_CENTER_DEADBAND * 0.5), v, True, False)
+    self.assertAlmostEqual(c, 0.0, places=9)
+    for _ in range(300):
+      c = lc.update(model(0.4), v, True, False)
+    self.assertGreater(c, 0.0)
+    prev = c
+    for _ in range(200):
+      c = lc.update(model(0.4, probs=(0.2, 0.2)), v, True, False)   # lines lost
+      self.assertLessEqual(c, prev + 1e-12)
+      prev = c
+    self.assertEqual(c, 0.0)
+    self.assertFalse(lc.valid)
+
+  def test_closed_loop_converges_at_highway_speed(self):
+    """Pure-feedback bicycle model with 0.3 s steering lag (no model path helping): 0.4 m off at 110 km/h is back
+    within 10 cm and the overshoot stays under 15 cm. On the car the model's own centring adds to this."""
+    v = 110 * CV.KPH_TO_MS
+    lc = LaneCentering(DT)
+    # y: metres LEFT of centre; psi: heading LEFT of the lane (rad)
+    y = 0.4
+    psi = 0.0
+    k_act = 0.0
+    hist = []
+    for _ in range(int(20 / DT)):
+      k_cmd = lc.update(model(y, psi), v, True, False)
+      k_act += (k_cmd - k_act) * DT / 0.3           # steering lag
+      psi += -k_act * v * DT                        # curvature positive = right turns the heading to the right
+      y += v * math.sin(psi) * DT                   # pointing left drifts the car left
+      hist.append(y)
+    self.assertLess(abs(hist[-1]), 0.10)
+    self.assertGreater(min(hist), -0.15)
+
+
+if __name__ == "__main__":
+  unittest.main()

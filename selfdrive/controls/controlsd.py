@@ -14,6 +14,7 @@ from opendbc.car.vehicle_model import VehicleModel
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from dragonpilot.selfdrive.controls.lib.curve_bias import apply_curve_outward_bias
+from dragonpilot.selfdrive.controls.lib.lane_centering import LaneCentering, apply_lane_centering
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -46,6 +47,7 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.lane_centering = LaneCentering(DT_CTRL)  # dragonpilot hook
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -136,6 +138,7 @@ class Controls:
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
       new_desired_curvature = apply_curve_outward_bias(new_desired_curvature, CS.vEgo) if CC.latActive else new_desired_curvature  # dragonpilot hook
+      new_desired_curvature = apply_lane_centering(self.lane_centering, new_desired_curvature, model_v2, CS, CC.latActive)  # dragonpilot hook
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
