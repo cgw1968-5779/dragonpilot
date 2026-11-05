@@ -5,6 +5,7 @@ import numpy as np
 from cereal import log
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.realtime import DT_MDL
+from dragonpilot.selfdrive.controls.lib.long_mpc_ext import LongMpcExt
 from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
 from openpilot.selfdrive.modeld.constants import index_function
@@ -233,6 +234,7 @@ class LongitudinalMpc:
     self.dt = dt
     self.launch_t = 0.0
     self.launch_offset = 0.0
+    self.ext = LongMpcExt()  # dragonpilot hook: tncr1's light onset / soft onset cap, see long_mpc_ext.py
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -369,6 +371,7 @@ class LongitudinalMpc:
     cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow)
 
     x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
+    x_obstacles = self.ext.adjust(x_obstacles, lead_xv_0, lead_xv_1, self.x_sol[:, 1], T_IDXS, personality)  # dragonpilot hook
     self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
 
     self.yref[:,:] = 0.0
@@ -376,7 +379,7 @@ class LongitudinalMpc:
       self.solver.set(i, "yref", self.yref[i])
     self.solver.set(N, "yref", self.yref[N][:COST_E_DIM])
 
-    self.params[:,0] = ACCEL_MIN
+    self.params[:,0] = self.ext.min_accel(ACCEL_MIN)  # dragonpilot hook: soft onset cap, see long_mpc_ext.py
     self.params[:,1] = ACCEL_MAX
     self.params[:,2] = np.min(x_obstacles, axis=1)
     self.params[:,3] = np.copy(self.a_prev)

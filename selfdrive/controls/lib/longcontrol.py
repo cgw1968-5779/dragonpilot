@@ -16,7 +16,7 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 # Cross end value at 0 km/h) and reaches it SOFT_END_LAG before the stop. Once easing starts it never firms again until the car
 # has stopped (no stop-go-stop). Only ever lighter than the planner, only in the last ~1 s, so the start and the
 # middle of every stop are unchanged.
-SOFT_END_ACCEL = -0.34  # m/s^2, Cross
+SOFT_END_ACCEL = -0.32  # m/s^2, Cross (owner 2026-11-05: end of a stop 0.02 lighter, was -0.34)
 SOFT_END_LAG = 0.6      # s, Cross
 SOFT_END_RAMP = 0.5     # s, shortest easing time
 SOFT_END_MAX_RATE = 1.0  # m/s^3, easing never releases faster than this: a firmer brake starts easing earlier
@@ -86,7 +86,7 @@ ENGAGE_HOLD_DOWN = 0.5      # m/s^3 (11-05: was 1.0)
 # gaps 18:53 4.6 -> 3.4, 19:47 4.5 -> 3.6, 19:54 4.1 -> 3.0, 19:57 3.2 -> 2.8, 20:42 3.3 -> 3.0 m; the other 12 stops
 # (urgent 18:43 included) identical. Same method as the soft end (no new layer); the lead comes from controlsd.
 STOP_LEVEL_V = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]                  # km/h
-STOP_LEVEL_A = [-0.34, -0.35, -0.37, -0.45, -0.57, -0.55, -0.57, -0.69, -0.93]  # m/s^2, tncr1 sent (median)
+STOP_LEVEL_A = [-0.32, -0.35, -0.37, -0.45, -0.57, -0.55, -0.57, -0.69, -0.93]  # m/s^2, tncr1 sent (median)
 STOP_LEVEL_V_MID = 10.0   # km/h: top of the level line
 STOP_LEVEL_V_ARM = 12.0   # km/h: from here down to STOP_LEVEL_V_MID it blends from the planner's request to the line
 STOP_LEVEL_GAP = 3.3      # m (radar dRel): the closest the eased stop may be predicted to end
