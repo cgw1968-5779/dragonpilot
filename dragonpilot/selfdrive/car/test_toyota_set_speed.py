@@ -157,7 +157,8 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(n=10)
     first = self.helper.v_cruise_cluster_kph
     self.assertLess(first, start)
-    self.assertEqual(first % 5, 0)
+    self.assertEqual(first % 10, 0)
+    self.assertGreater(first, start - 10.01)
     self.step(n=L)
     self.assertEqual(self.helper.v_cruise_cluster_kph, first - LONG_PRESS_DOWN)
     self.step(n=L)
@@ -168,6 +169,21 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(n=20 * L)  # held long enough: down to the stop target and no further
     self.step(events=[(ButtonType.decelCruise, False)])
     self.assertEqual(self.helper.v_cruise_kph, 0.)
+
+  def test_long_press_minus_from_45_goes_40_30_20_10_0(self):
+    self.engage_with_set()
+    while self.helper.v_cruise_cluster_kph > 45.:
+      self.tap(ButtonType.decelCruise, hold_frames=3)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 45.)
+    L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
+    self.step(events=[(ButtonType.decelCruise, True)])
+    seen = []
+    self.step(n=5)
+    for _ in range(6):
+      self.step(n=L)
+      seen.append(self.helper.v_cruise_cluster_kph)
+    self.step(events=[(ButtonType.decelCruise, False)])
+    self.assertEqual(seen, [40., 30., 20., 10., 0., 0.])
 
   def test_res_from_zero_at_standstill_returns_to_the_ceiling(self):
     self.engage_with_set()
