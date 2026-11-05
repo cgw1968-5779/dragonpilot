@@ -67,6 +67,17 @@ ENGAGE_ONSET_J_STOCK = 4.0  # m/s^3 after it (stock carcontroller wind-down limi
 # without braking (accelerating or coasting: every cut-in) gets the same curve as the engage onset: -0.15 at 0.1 s,
 # -0.40 at 0.2 s, then the stock ENGAGE_ONSET_J_STOCK until the planner's request is reached. A planner that builds
 # slower is untouched.
+# dpcr (owner 2026-11-05 night, route 000000e4 22:52:51): "pressing SET at 63 km/h felt like a push forward; every time
+# SET-/RES+ is pressed above 30 km/h, the first 0.1 s of acceleration only 0.05, 0.2 s 0.2, 0.3 s 0.4, then join the
+# planner". At 22:52:51 the command jumped 0 -> +0.22 on the first engaged frame (the planner's acceleration computed
+# before the set speed existed) and the car went -0.26 -> +0.50 m/s^2 in 0.4 s (slope only -0.7 deg). So an engagement
+# (not the release of a gas override) above ENGAGE_GAS_MIN_V that asks for acceleration is capped by the curve
+# ENGAGE_GAS_T / ENGAGE_GAS_A, then climbs on at ENGAGE_GAS_J until the planner's request is reached; it is never more
+# than the planner, and a brake request is left to the brake onset.
+ENGAGE_GAS_MIN_V = 30.0                 # km/h
+ENGAGE_GAS_T = [0.0, 0.1, 0.2, 0.3]     # s after engaging
+ENGAGE_GAS_A = [0.0, 0.05, 0.2, 0.4]    # m/s^2 cap
+ENGAGE_GAS_J = 2.0                      # m/s^3 after ENGAGE_GAS_T[-1] (the 0.2 -> 0.4 slope)
 BRAKE_ONSET_FROM = -0.1      # m/s^2: "not braking" is a command at or above this
 BRAKE_ONSET_COAST_T = 0.5    # s not braking before a new onset
 ENGAGE_HOLD_MAX_T = 15.0    # s after the onset
@@ -191,6 +202,7 @@ class LongControl:
     self.bo_t: float | None = None  # s since a brake onset (while driving) began
     self.bo_ramp = 0.0
     self.coast_t = 0.0  # s without braking
+    self.gas_t: float | None = None  # s since engaging, while the engage gas onset caps the request
     self.lead = None  # radarState.leadOne, set by controlsd every frame (None: no radarState)
 
   def reset(self):
@@ -229,6 +241,7 @@ class LongControl:
     output_accel = self.stop_end_level(output_accel, a_target, CS)
     output_accel = self.hold_stop_end(output_accel, a_target, CS)
     output_accel = self.engage_onset(output_accel, CS)
+    output_accel = self.engage_gas_onset(output_accel, CS)
 
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
@@ -317,6 +330,28 @@ class LongControl:
         return ramp
       self.onset_done = True  # request reached: the hold below from here on
     return self.brake_onset(self.engage_hold(output_accel, CS), CS)
+
+  def engage_gas_onset(self, output_accel, CS):
+    """soft start of the acceleration right after SET/RES above ENGAGE_GAS_MIN_V (see ENGAGE_GAS_*)"""
+    if self.long_control_state == LongCtrlState.off:
+      # releasing a gas override is not an engagement
+      self.gas_t = None if getattr(CS, "gasPressed", False) else 0.0
+      return output_accel
+    if self.gas_t is None:
+      return output_accel
+    t = self.gas_t
+    self.gas_t += DT_CTRL
+    if CS.vEgo * 3.6 <= ENGAGE_GAS_MIN_V or self.long_control_state != LongCtrlState.pid or (t == 0.0 and output_accel <= 0.0):
+      self.gas_t = None  # slow, stopping/starting, or the engagement starts with a brake: not this onset
+      return output_accel
+    if t <= ENGAGE_GAS_T[-1]:
+      cap = float(np.interp(t, ENGAGE_GAS_T, ENGAGE_GAS_A))
+    else:
+      cap = ENGAGE_GAS_A[-1] + ENGAGE_GAS_J * (t - ENGAGE_GAS_T[-1])
+    if output_accel > cap:
+      return cap
+    self.gas_t = None  # the planner's request is reached (or it asks for less): done
+    return output_accel
 
   def brake_onset(self, output_accel, CS):
     if self.bo_t is None:
