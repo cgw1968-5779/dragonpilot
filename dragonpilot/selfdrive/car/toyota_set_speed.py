@@ -248,7 +248,8 @@ class ToyotaSoftwareSetSpeed:
       self.to_ceiling(h, CS, is_metric)
 
   def repeat_long_minus(self, h, CS, is_metric: bool) -> None:
-    """While - is held past a short press, lower the target by LONG_PRESS_DOWN at once and again every further
+    """While - is held past a short press, lower the target to the next lower multiple of
+    LONG_PRESS_DOWN at once and by LONG_PRESS_DOWN again every further
     TOYOTA_VIRTUAL_CRUISE_LONG_PRESS (1 s) it stays held, down to 0 (owner 2026-11-05: holding - must keep going down
     10 at a time without releasing). The release of such a press is then ignored by short_presses."""
     hold = h.button_timers[ButtonType.decelCruise]
@@ -259,7 +260,9 @@ class ToyotaSoftwareSetSpeed:
     delta = (1. if is_metric else IMPERIAL_INCREMENT) * SHORT_PRESS_INCREMENT
     step = delta * LONG_PRESS_DOWN / SHORT_PRESS_INCREMENT
     ref = h.v_cruise_cluster_kph
-    self.apply_dial_delta(h, max(math.ceil(round(ref / delta, 6)) * delta - step, 0.) - ref)
+    # first down to the next lower multiple of 10 (45 -> 40, 86 -> 80), then 10 at a time: 40, 30, 20, 10, 0
+    # (owner 2026-11-05)
+    self.apply_dial_delta(h, max((math.ceil(round(ref / step, 6)) - 1) * step, 0.) - ref)
 
   def apply_dial_delta(self, h, delta_kph: float) -> None:
     """Apply a delta in DISPLAY (speedometer) space and keep the canonical target on the dial's calibration line."""
