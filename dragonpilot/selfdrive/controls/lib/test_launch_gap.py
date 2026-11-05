@@ -31,7 +31,7 @@ def test_lead_moving_away_gives_the_gap():
   assert outs[1] == 0.0                                     # not after one frame
   k = next(i for i, o in enumerate(outs) if o > 0.0)
   assert (k + 1) * DT <= lm.LAUNCH_T + DT + 1e-9            # within LAUNCH_T
-  assert abs(outs[k] - (lm.STOP_DISTANCE - 3.5 + lm.LAUNCH_EXTRA)) < 1e-9
+  assert abs(outs[k] - (lm.STOP_DISTANCE + lm.STOP_EXTRA - 3.5 + lm.LAUNCH_EXTRA)) < 1e-9
 
 
 def test_fades_once_moving_and_faster_if_the_lead_stops():

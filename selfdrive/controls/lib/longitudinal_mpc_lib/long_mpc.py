@@ -73,6 +73,13 @@ LAUNCH_FADE = 0.5           # m/s
 LAUNCH_FADE_STOPPED = 2.0   # m/s
 LAUNCH_EGO_V = 0.3          # m/s: "we are stopped"
 LAUNCH_EXTRA = 0.5          # m beyond the gap we stopped at, so a lead creeping off slowly is followed at once
+# dragonpilot (dppb, owner 2026-11-05): "the distance I stopped at behind the truck (09:19:43, radar 4.00 m) is the
+# standard stop position; calibrate every stop to it". STOP_DISTANCE is compiled into the acados model, so the MPC is
+# given every real lead STOP_EXTRA closer than measured: its stop target (and its following distance) moves out by
+# STOP_EXTRA without a rebuild. With the stop end's gaps at 4.0 m (longcontrol), closed-loop sim of 17 engaged stops
+# (11-04/11-05, x86 MPC, Altis low-speed map): median 3.32 -> 3.94 m, 3 -> 9 within 3.5-4.5 m; the three gentle stops
+# that already end far (lead stopping with us) end ~0.5 m farther (owner chose to road test it).
+STOP_EXTRA = 0.7            # m
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
@@ -310,7 +317,7 @@ class LongitudinalMpc:
   def process_lead(self, lead):
     v_ego = self.x0[1]
     if lead is not None and lead.status:
-      x_lead = lead.dRel
+      x_lead = lead.dRel - STOP_EXTRA  # dragonpilot hook
       v_lead = lead.vLead
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
@@ -336,8 +343,8 @@ class LongitudinalMpc:
       return 0.0
     if v_ego < LAUNCH_EGO_V and self.launch_offset == 0.0:
       self.launch_t = self.launch_t + self.dt if lead.vLead > LAUNCH_V else 0.0
-      if self.launch_t >= LAUNCH_T and lead.dRel < STOP_DISTANCE:
-        self.launch_offset = STOP_DISTANCE - lead.dRel + LAUNCH_EXTRA
+      if self.launch_t >= LAUNCH_T and lead.dRel - STOP_EXTRA < STOP_DISTANCE:
+        self.launch_offset = STOP_DISTANCE - (lead.dRel - STOP_EXTRA) + LAUNCH_EXTRA
     elif self.launch_offset > 0.0:
       fade = LAUNCH_FADE_STOPPED if lead.vLead < LAUNCH_V else (LAUNCH_FADE if v_ego >= LAUNCH_EGO_V else 0.0)
       self.launch_offset = max(self.launch_offset - fade * self.dt, 0.0)
