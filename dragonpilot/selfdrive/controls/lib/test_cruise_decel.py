@@ -17,24 +17,25 @@ def test_passthrough_when_not_slowing_or_bypassed():
 def test_high_speed_eases_throttle_half_coast():
   c = cd.CruiseDecel()
   for mode in (cd.ECO, cd.NORMAL, cd.SPORT):
-    d = c.decel(mode, 100 * KPH, 80 * KPH, FLAT_COAST)
+    d = c.decel(mode, 105 * KPH, 80 * KPH, FLAT_COAST)
     assert abs(d - cd.HIGH_FRAC * FLAT_COAST) < 1e-9
     c._reset()
 
 
-def test_eco_schedule_grows_toward_30():
+def test_eco_line_100_to_20():
+  # owner 2026-11-05 night: below 100 km/h the decel rises slowly until 20 km/h
   c = cd.CruiseDecel()
-  d70 = c.decel(cd.ECO, 70 * KPH, 20 * KPH, FLAT_COAST)
-  d60 = c.decel(cd.ECO, 60 * KPH, 20 * KPH, FLAT_COAST)
-  d45 = c.decel(cd.ECO, 45 * KPH, 20 * KPH, FLAT_COAST)
-  d31 = c.decel(cd.ECO, 31 * KPH, 20 * KPH, FLAT_COAST)
-  assert abs(d70 - FLAT_COAST) < 1e-3 and abs(d60 - -0.40) < 1e-3
-  assert d70 > d60 > d45 > d31 >= -0.50 - 1e-9
+  d = {k: c.decel(cd.ECO, k * KPH, 10 * KPH, FLAT_COAST) for k in (99, 90, 80, 70, 60, 50, 40, 30, 21)}
+  assert abs(d[90] - -0.325) < 1e-3 and abs(d[60] - -0.40) < 1e-3 and abs(d[30] - -0.475) < 1e-3
+  ks = sorted(d)
+  for a, b in zip(ks, ks[1:]):
+    assert d[a] < d[b]  # firmer at lower speed
+  assert min(d.values()) >= -0.50 - 1e-9
 
 
-def test_no_step_at_80():
+def test_no_step_at_95_100():
   c = cd.CruiseDecel()
-  v = np.arange(70, 90, 0.1) * KPH
+  v = np.arange(85, 110, 0.1) * KPH
   d = [c.decel(cd.ECO, x, 40 * KPH, FLAT_COAST) for x in v]
   assert max(abs(np.diff(d))) < 0.01
 
@@ -54,11 +55,11 @@ def test_normal_latches_one_decel():
 
 
 def test_set_zero_firmest_at_30_to_20_then_linear_to_the_end():
-  # owner 2026-11-05: set 0 from 35 km/h and up: firmest at 30 and 20 km/h, then easing linearly to the stop
+  # owner 2026-11-05: set 0 from 35 km/h and up: firmest at 30-20 km/h (11-05 night: line ends at 20), then easing linearly
   c = cd.CruiseDecel()
   d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (60, 45, 35, 30, 25, 20, 15, 10, 5)}
-  assert abs(d[30] - -0.50) < 1e-3 and abs(d[25] - -0.50) < 1e-3 and abs(d[20] - -0.50) < 1e-3
-  assert d[60] > d[45] > d[35] > d[30] - 1e-9
+  assert abs(d[30] - -0.475) < 1e-3 and abs(d[20] - -0.50) < 1e-3
+  assert d[60] > d[45] > d[35] > d[30] > d[25] > d[20]
   assert d[20] < d[15] < d[10] < d[5] < cd.ECO_DECEL_V[0] + 1e-9
   assert abs((d[15] - d[10]) - (d[10] - d[5])) < 1e-9  # linear
   assert min(d.values()) >= -0.50 - 1e-9
