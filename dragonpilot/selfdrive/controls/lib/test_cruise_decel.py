@@ -22,14 +22,13 @@ def test_high_speed_eases_throttle_half_coast():
     c._reset()
 
 
-def test_eco_line_80_to_30_firmest_to_5_then_0():
-  # owner 2026-11-06: -0.3 at 80 km/h, -1.0 from 30 down to 5 km/h, -0.34 at 0
+def test_eco_line_owner_low_end():
+  # owner 2026-11-06: -0.3 at 80, -1.0 at 30, -0.95 at 6, then 5/4/3/2/1/0 km/h -0.8/-0.6/-0.4/-0.36/-0.34/-0.34
   c = cd.CruiseDecel()
-  d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (90, 80, 55, 30, 20, 10, 5, 2.5)}
-  assert abs(d[90] - -0.30) < 1e-3 and abs(d[80] - -0.30) < 1e-3 and abs(d[55] - -0.65) < 1e-3
-  for k in (30, 20, 10, 5):
-    assert abs(d[k] - -1.00) < 1e-3
-  assert abs(d[2.5] - -0.67) < 1e-3
+  d = lambda k: float(np.interp(k / 3.6, cd.ECO_DECEL_BP, cd.ECO_DECEL_V))
+  for k, a in ((80, -0.30), (30, -1.00), (6, -0.95), (5, -0.80), (4, -0.60), (3, -0.40), (2, -0.36), (1, -0.34), (0, -0.34)):
+    assert abs(d(k) - a) < 1e-9
+  assert abs(c.decel(cd.ECO, 55 * KPH, 0.0, FLAT_COAST) - -0.65) < 1e-3
 
 
 def test_no_step_at_95_100():
@@ -53,11 +52,11 @@ def test_normal_latches_one_decel():
   assert d2 == max(d1, (55 - 58) * KPH / cd.TAPER_T)
 
 
-def test_set_zero_firmest_from_30_to_5_then_eases_to_the_end():
+def test_set_zero_firmest_from_30_to_6_then_eases_to_the_end():
   c = cd.CruiseDecel()
-  d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (60, 30, 5, 3, 1)}
-  assert d[60] > d[30] and abs(d[30] - -1.0) < 1e-3 and abs(d[5] - -1.0) < 1e-3
-  assert d[5] < d[3] < d[1] < 0.0  # easing toward the stop (the last metre also lands on the target)
+  d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (60, 30, 6, 4, 2)}
+  assert d[60] > d[30] and abs(d[30] - -1.0) < 1e-3 and abs(d[6] - -0.95) < 1e-3
+  assert d[6] < d[4] < d[2] < 0.0
 
 
 def test_low_target_uses_the_eco_line_in_every_mode():
