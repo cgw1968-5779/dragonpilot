@@ -12,6 +12,7 @@ from openpilot.system.hardware import TICI
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.label import UnifiedLabel
+from dragonpilot.selfdrive.ui.mici.lane_change_hud import fit_font, make_room
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -205,6 +206,7 @@ class AlertRenderer(Widget):
     elif icon_side == 'right':
       text_x = self._rect.x + ALERT_MARGIN
       text_width = self._rect.width - ALERT_MARGIN - self._txt_turn_signal_right.width
+    text_x, text_width, icon_margin_x = make_room(event_name, icon_side, text_x, text_width, icon_margin_x, self._rect.x)  # dragonpilot hook
 
     text_rect = rl.Rectangle(
       text_x,
@@ -308,6 +310,7 @@ class AlertRenderer(Widget):
 
     if icon_side is not None:
       font_size -= 10
+    font_size = fit_font(alert.alert_type, alert_text1, font_size, alert_layout.text_rect.width, FontWeight.DISPLAY)  # dragonpilot hook
 
     color = rl.Color(255, 255, 255, int(255 * 0.9 * self._alpha_filter.x))
 
@@ -342,6 +345,7 @@ class AlertRenderer(Widget):
         small_font_size = 32
       else:
         small_font_size = 40
+      small_font_size = fit_font(alert.alert_type, alert_text2, small_font_size, alert_layout.text_rect.width, FontWeight.ROMAN)  # dragonpilot hook
       text_rect2 = rl.Rectangle(
         alert_layout.text_rect.x,
         last_line_h,

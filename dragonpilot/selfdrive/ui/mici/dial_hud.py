@@ -23,6 +23,7 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.selfdrive.ui.ui_state import ui_state
 from opendbc.car.toyota.software_set_speed import software_set_speed
 from dragonpilot.selfdrive.car.toyota_set_speed import TOYOTA_DIAL_SLOPE, TOYOTA_DIAL_OFFSET_KPH
+from dragonpilot.selfdrive.ui.mici import lane_change_hud
 
 KM_TO_MILE = 0.621371
 OFFSET_FULL_KPH = 30.0  # km/h (vEgo) from which the full dial offset applies
@@ -33,6 +34,7 @@ PCM_SIZE = 30  # px
 PCM_GAP = 12  # px between the set speed and the PCM ceiling
 LARGE_LABEL_RAISE = 12  # px
 LARGE_LABEL_FREE = 60  # px: labels up to this size fit above the wheel icon unraised
+BOX_MARGIN = 10  # px kept free right of the box for a lane change banner (lane_change_hud.py)
 BASELINE_RATIO = 0.78  # baseline height / font size, aligns the smaller PCM text with the label
 
 
@@ -50,6 +52,8 @@ class DialHud:
   def update(self, car_state) -> None:
     CP = ui_state.CP
     self.active = CP is not None and software_set_speed(CP)
+    lane_change_hud.set_active(self.active)
+    lane_change_hud.set_room(0.0)  # set again by draw() when the box is on screen
     if not self.active:
       return
     value = dial_kph(car_state.vEgo * CV.MS_TO_KPH)
@@ -65,6 +69,7 @@ class DialHud:
     """replaces HudRenderer._draw_set_speed (same position, fonts and drop shadow)"""
     alpha = hud._set_speed_alpha_filter.update(hud._can_draw_top_icons and hud._engaged and hud.is_cruise_set)
     if alpha < 1e-2:
+      lane_change_hud.set_room(0.0)
       return
     x, y = rect.x, rect.y
     big_size = 112  # FONT_SIZES.set_speed
@@ -88,3 +93,14 @@ class DialHud:
       number_y = label_y + (SPEED_LABEL_SIZE - PCM_SIZE) * BASELINE_RATIO
       for text, pos_y in (("PCM", number_y - PCM_SIZE), (str(round(ceiling)), number_y)):
         rl.draw_text_ex(hud._font_medium, text, rl.Vector2(pcm_x, pos_y), PCM_SIZE, 0, color)
+
+    lane_change_hud.set_room(self.box_width(hud, label))
+
+  def box_width(self, hud, label: str) -> float:
+    """width of the box as drawn above (same x offsets and fonts) plus BOX_MARGIN"""
+    w = 17 + measure_text_cached(hud._font_display, str(self.shown), 112).x
+    label_w = 25 + measure_text_cached(hud._font_semi_bold, label, SPEED_LABEL_SIZE).x
+    if self.pcm_ceiling > 0:
+      ceiling = self.pcm_ceiling if ui_state.is_metric else self.pcm_ceiling * KM_TO_MILE
+      label_w += PCM_GAP + max(measure_text_cached(hud._font_medium, t, PCM_SIZE).x for t in ("PCM", str(round(ceiling))))
+    return max(w, label_w) + BOX_MARGIN
