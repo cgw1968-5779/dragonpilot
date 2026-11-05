@@ -25,7 +25,8 @@ CURVE_OUTWARD_V_BP = [v * CV.KPH_TO_MS for v in (30., 40., 50., 60., 70., 90., 1
 # the low-speed inward bias goes: 30 km/h -0.05 -> 0, 40 km/h 0.02 -> 0.05 (50 km/h and up unchanged).
 # dpcr, owner 2026-11-03 night (after the first road test of these values: "FRAC clearly improved curve centring"):
 # 60 and 70 km/h +0.02 (0.085 -> 0.105, 0.09 -> 0.11); then 60 km/h +0.005 more (0.105 -> 0.11).
-CURVE_OUTWARD_FRAC_V = [0.0, 0.05, 0.06, 0.11, 0.11, 0.155, 0.155, 0.155]
+# dpcr, owner 2026-11-05 night: 50 km/h +0.02 (0.06 -> 0.08).
+CURVE_OUTWARD_FRAC_V = [0.0, 0.05, 0.08, 0.11, 0.11, 0.155, 0.155, 0.155]
 
 
 def apply_curve_outward_bias(desired_curvature: float, v_ego: float) -> float:
