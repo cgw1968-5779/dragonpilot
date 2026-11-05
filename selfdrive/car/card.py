@@ -69,7 +69,7 @@ class Car:
 
   def __init__(self, CI=None, RI=None) -> None:
     self.can_sock = messaging.sub_sock('can', timeout=20)
-    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents'])
+    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents', 'radarState'])  # dragonpilot hook: radarState for tncr1's send side
     self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'liveTracks', 'carStateExt'])
 
     self.can_rcv_cum_timeout_counter = 0
@@ -275,6 +275,8 @@ class Car:
     if self.sm.all_alive(['carControl']):
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
+      if self.CI.CC is not None:
+        self.CI.CC.lead_one = self.sm['radarState'].leadOne if self.sm.alive['radarState'] else None  # dragonpilot hook: tncr1 CC_SP.leadOne
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos)
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 

@@ -10,6 +10,17 @@ from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.auto_hold import AutoBrakeHold, auto_hold_available
+from types import SimpleNamespace
+# dragonpilot (dpcr, owner 2026-11-06 "copy tncr1's mid/low-speed longitudinal control exactly"): tncr1's send side
+from opendbc.car.toyota.tncr1_send.end_force import end_force_cap
+from opendbc.car.toyota.tncr1_send.delivery_trim import DeliveryTrim
+from opendbc.car.toyota.tncr1_send.pitch_compensation import apply_pitch_deadband
+from opendbc.car.toyota.tncr1_send.engage_close_stop import EngageCloseStop
+from opendbc.car.toyota.tncr1_send.brake_onset import BrakeOnsetShaper, BrakeCommandCorrections, EngageOnsetShaper
+
+# tncr1 hands the car side the radar lead in CarControlSP.leadOne; dp has no CarControlSP: card sets CarController.lead_one
+_NO_LEAD = SimpleNamespace(status=False, present=False, dRel=0.0, yRel=0.0, vRel=0.0, aRel=0.0, vLead=0.0, vLeadK=0.0,
+                           aLeadK=0.0, aLeadTau=1.5, modelProb=0.0, radar=False, radarTrackId=-1, dPath=0.0, vLat=0.0, fcw=False)
 from opendbc.car.toyota.values import CAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -48,8 +59,9 @@ DRIVE = car.CarState.GearShifter.drive
 
 def get_long_tune(CP, params):
   if CP.carFingerprint in TSS2_CAR:
-    kiBP = [2., 5.]
-    kiV = [0.5, 0.25]
+    # dpcr: tncr1's TSS2_LONG_TUNING table (ToyotaTSS2Long was on for every C4 tncr1 route; was dp/stock [2, 5] / [0.5, 0.25])
+    kiBP = [0.,   0.3,   5.0,   12.,  27.,  36.]
+    kiV  = [0.50, 0.52, 0.25,  0.23, 0.10, 0.09]
   else:
     kiBP = [0., 5., 35.]
     kiV = [3.6, 2.4, 1.5]
@@ -73,12 +85,18 @@ class CarController(CarControllerBase):
 
     # *** start long control state ***
     self.long_pid = get_long_tune(self.CP, self.params)
-    self.aego = FirstOrderFilter(0.0, 0.25, DT_CTRL * 3)
+    self.delivery_trim = DeliveryTrim()  # tncr1: measured delivery residual, see tncr1_send/delivery_trim.py
+    self.aego = FirstOrderFilter(0.0, 0.45, DT_CTRL * 3)  # tncr1 0.45 (dp 0.25)
     self.pitch = FirstOrderFilter(0, 0.5, DT_CTRL)
     self.pitch_hp = HighPassFilter(0.0, 0.25, 1.5, DT_CTRL)
 
     self.accel = 0
     self.prev_accel = 0
+    self.brake_onset = BrakeOnsetShaper(DT_CTRL * 3, -ACCEL_WINDDOWN_LIMIT / (DT_CTRL * 3))  # tncr1
+    self.engage_onset = EngageOnsetShaper(DT_CTRL * 3, ACCEL_WINDUP_LIMIT / (DT_CTRL * 3))  # tncr1
+    self.brake_corrections = BrakeCommandCorrections(DT_CTRL * 3)  # tncr1: see tncr1_send/brake_onset.py
+    self.engage_close = EngageCloseStop()  # tncr1: see tncr1_send/engage_close_stop.py
+    self.lead_one = None  # set by card (dragonpilot hook): radarState.leadOne as tncr1's CarControlSP.leadOne
     # *** end long control state ***
 
     self.packer = CANPacker(dbc_names[Bus.pt])
@@ -214,12 +232,26 @@ class CarController(CarControllerBase):
 
         # internal PCM gas command can get stuck unwinding from negative accel so we apply a generous rate limit
         pcm_accel_cmd = actuators.accel
+        lead_one = self.lead_one if self.lead_one is not None else _NO_LEAD
+        self.engage_onset.cruise_state(CS.out.cruiseState.enabled)  # tncr1 hook
         if CC.longActive:
-          # dragonpilot (owner 2026-11-05, launch behind a lead): at standstill the held brake (stopAccel) is released at
-          # once when the planner lets go - the car does not move, so nothing is felt; the drive side keeps the wind-up limit
-          if CS.out.standstill and pcm_accel_cmd > self.prev_accel and self.prev_accel < 0.0:  # dragonpilot hook
-            self.prev_accel = min(pcm_accel_cmd, 0.0)
-          pcm_accel_cmd = rate_limit(pcm_accel_cmd, self.prev_accel, ACCEL_WINDDOWN_LIMIT, ACCEL_WINDUP_LIMIT)
+          self.prev_accel = self.engage_onset.start_accel(self.prev_accel, CS.out.aEgo, CS.out.vEgo)  # tncr1 hook
+          self.engage_close.update(lead_one, CS.out.vEgo, CS.out.standstill, pcm_accel_cmd,
+                                   self.engage_onset.t_since_engage)  # tncr1 hook
+          pcm_accel_cmd = self.engage_close.cap(pcm_accel_cmd, lead_one, CS.out.vEgo)
+          # a hard request bypasses the soft brake onset, except in the first 0.6 s after engaging (FCW always does)
+          urgent = self.brake_onset.is_urgent(pcm_accel_cmd, False) and not self.engage_onset.in_engage_window
+          winddown_step = self.brake_onset.down_step(pcm_accel_cmd, self.prev_accel, bypass=fcw_alert, v_ego=CS.out.vEgo,
+                                                     urgent=urgent, t_engaged=self.engage_onset.t_since_engage,
+                                                     a_ego=CS.out.aEgo, brake_force=CS.brake_force,
+                                                     engage_j_down=self.engage_close.j_down if self.engage_close.active else None,
+                                                     lead=lead_one)  # tncr1 hook
+          windup_step = self.engage_onset.up_step(True)
+          pcm_accel_cmd = rate_limit(pcm_accel_cmd, self.prev_accel, winddown_step, windup_step)
+        else:
+          self.brake_onset.reset()
+          self.engage_onset.reset()
+          self.engage_close.reset()
         self.prev_accel = pcm_accel_cmd
 
         # calculate amount of acceleration PCM should apply to reach target, given pitch.
@@ -253,14 +285,24 @@ class CarController(CarControllerBase):
             # acceleration request to compensate for the undershoot and following overshoot
             pitch_compensation = float(np.clip(math.sin(self.pitch_hp.x) * ACCELERATION_DUE_TO_GRAVITY,
                                                -MAX_PITCH_COMPENSATION, MAX_PITCH_COMPENSATION))
-            pcm_accel_cmd += pitch_compensation
+            pcm_accel_cmd += apply_pitch_deadband(pitch_compensation)  # tncr1 hook: pitch_compensation.py
 
+          freeze_i = self.brake_corrections.condition_pid(self.long_pid, self.prev_accel, CS.out.vEgo)  # tncr1 hook
+          freeze_i = freeze_i or self.engage_close.active
           pcm_accel_cmd = self.long_pid.update(error_future,
                                                speed=CS.out.vEgo,
                                                feedforward=pcm_accel_cmd,
-                                               freeze_integrator=actuators.longControlState != LongCtrlState.pid)
+                                               freeze_integrator=actuators.longControlState != LongCtrlState.pid or freeze_i)
+          pcm_accel_cmd = self.brake_corrections.apply(pcm_accel_cmd, self.prev_accel, a_ego_future, CS.out.vEgo, stopping,
+                                                       fcw_alert, a_ego=a_ego_blended,
+                                                       relaxed=hud_control.leadDistanceBars == 3,
+                                                       handover=not self.engage_close.active)  # tncr1 hook
+          pcm_accel_cmd = self.delivery_trim.apply(pcm_accel_cmd, CS.out.vEgo, CS.out.standstill, CC.longActive)  # tncr1 hook
+          pcm_accel_cmd = end_force_cap(pcm_accel_cmd, actuators.accel, CS.out.vEgo, CS.out.standstill)  # tncr1 hook
         else:
           self.long_pid.reset()
+          self.brake_corrections.reset()  # tncr1 hook
+          self.delivery_trim.reset()  # tncr1 hook
 
         # Along with rate limiting positive jerk above, this greatly improves gas response time
         # Consider the net acceleration request that the PCM should be applying (pitch included)

@@ -192,6 +192,9 @@ class LongitudinalPlanner:
     else:
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
+    # dragonpilot hook (dpcr 2026-11-06, tncr1 copy): tncr1's should_stop - the car's own speed below 0.3 m/s and the target
+    # below 0.1 (drive_helpers.should_stop), not the plan's first speed below vEgoStopping (0.25); e2e's own flag kept
+    self.output_should_stop = bool(v_ego < 0.3 and output_a_target < 0.1) or (mode == 'blended' and output_should_stop_e2e)
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)

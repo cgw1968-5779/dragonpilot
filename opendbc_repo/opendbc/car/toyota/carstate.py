@@ -10,6 +10,7 @@ from opendbc.car.toyota.hybrid_state import HybridState, hybrid_pt_messages
 from opendbc.car.toyota.software_set_speed import CruiseStalk, software_set_speed, CLUTCH_FREQ
 from opendbc.car.toyota.cluster_speed import cluster_speed, CLUSTER_HYST_GAP
 from opendbc.car.toyota.auto_hold import AutoHoldInputs, auto_hold_available, auto_hold_pt_messages, auto_hold_cam_messages
+from opendbc.car.toyota.tncr1_send.creep_speed import Tncr1CreepSpeed
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, TSS2_CAR, RADAR_ACC_CAR, \
                                                   EPS_SCALE, UNSUPPORTED_DSU_CAR, SECOC_CAR
 
@@ -52,6 +53,8 @@ class CarState(CarStateBase):
     self.distance_button = 0
     self.cruise_stalk = CruiseStalk() if software_set_speed(CP) else None  # dragonpilot hook
     self.auto_hold_inputs = AutoHoldInputs() if auto_hold_available(CP) else None  # dragonpilot hook
+    self.brake_force = float('nan')  # dragonpilot hook (dpcr tncr1 copy): BRAKE_FORCE for tncr1's brake onset
+    self.tncr1_creep = Tncr1CreepSpeed()  # dragonpilot hook (dpcr tncr1 copy)
 
     self.pcm_follow_distance = 0
 
@@ -119,6 +122,7 @@ class CarState(CarStateBase):
     ret.vEgoCluster = ret.vEgo * 1.015  # minimum of all the cars
     ret.vEgoCluster = cluster_speed(ret.vEgo)  # dragonpilot hook
 
+    self.tncr1_creep.update(ret, cp, self.brake_force)  # dragonpilot hook (dpcr tncr1 copy): creep speed below 0.5 km/h
     ret.standstill = abs(ret.vEgoRaw) < 1e-3
 
     ret.vehicleSensorsInvalid = any(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{whl}_FAULT"]
@@ -249,6 +253,7 @@ class CarState(CarStateBase):
 
     ret.buttonEvents = buttonEvents
     self.auto_hold_inputs.update(cp, cp_cam) if self.auto_hold_inputs is not None else None  # dragonpilot hook
+    self.brake_force = float(cp.vl["BRAKE"]["BRAKE_FORCE"]) if "BRAKE" in cp.vl else self.brake_force  # dragonpilot hook (tncr1)
 
     # dp - ALKA: Toyota requires main ON to use ACC/LKA, use main as switch
     self.lkas_on = ret.cruiseState.available

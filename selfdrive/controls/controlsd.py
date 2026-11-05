@@ -20,6 +20,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from dragonpilot.selfdrive.controls.lib.tncr1_long.long_ext import LeadView, Tncr1Long
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -53,6 +54,7 @@ class Controls:
     self.calibrated_pose: Pose | None = None
 
     self.LoC = LongControl(self.CP)
+    self.tncr1_long = Tncr1Long(self.CP)  # dragonpilot hook
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
@@ -128,8 +130,10 @@ class Controls:
 
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
-    self.LoC.lead = self.sm['radarState'].leadOne if self.sm.alive['radarState'] and self.sm.valid['radarState'] else None  # dragonpilot hook
-    actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
+    lead_one = LeadView(self.sm['radarState'].leadOne if self.sm.alive['radarState'] and self.sm.valid['radarState'] else None)  # dragonpilot hook
+    a_target = self.tncr1_long.long_target(self.LoC, long_plan, CS, CC.longActive, lead_one)  # dragonpilot hook
+    actuators.accel = float(self.LoC.update(CC.longActive, CS, a_target, long_plan.shouldStop, pid_accel_limits))
+    actuators.accel = self.tncr1_long.long_accel(self.LoC, CS, long_plan, pid_accel_limits, CC.longActive, lead_one, self.calibrated_pose)  # dragonpilot hook
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
