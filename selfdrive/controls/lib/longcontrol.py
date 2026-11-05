@@ -24,19 +24,50 @@ SOFT_END_MIN_DECEL = 0.3  # m/s^2, floor of the decel used for the time to the s
 SOFT_END_RESET_V = 3.0  # m/s, a new stop can start easing again above this speed
 SOFT_END_URGENT = -1.5  # m/s^2, never ease while the planner asks for more than this (urgent stop)
 
-# dragonpilot (dpcr, owner 2026-11-03): "at mid / low speed, the first 0.1 s of the brake on the first SET / RESUME press
-# should be softer". Engaging with a lead (or a set speed) that needs braking, the planner's target is applied at once
-# and carcontroller's 4 m/s^3 wind-down is the only limit: -0.4 m/s^2 after 0.1 s, which is felt as a bite. A brake
-# that starts within ENGAGE_ONSET_WINDOW of engaging now builds with a rising jerk: ENGAGE_ONSET_J0 at its start,
-# growing linearly to ENGAGE_ONSET_J1 (= the stock 4 m/s^3 limit) over ENGAGE_ONSET_T, after which nothing is changed.
-# -0.15 at 0.1 s, -0.4 at 0.2 s, -0.75 at 0.3 s (stock: -0.4 / -0.8 / -1.2): a -1.0 request is reached ~0.1 s later.
-# Dynamic only: it follows the request (a light request is reached in the soft part and is not touched), only ever
-# lighter than the planner, only for the first 0.3 s of the first brake after engaging; normal stops are unchanged.
-# Not tied to a speed: a brake right at engagement only happens at mid / low speed in practice.
-ENGAGE_ONSET_WINDOW = 1.0  # s after engaging in which a brake onset gets the soft start
-ENGAGE_ONSET_J0 = 1.0      # m/s^3 at the start of the brake
-ENGAGE_ONSET_J1 = 4.0      # m/s^3 at ENGAGE_ONSET_T (stock carcontroller wind-down limit)
-ENGAGE_ONSET_T = 0.3       # s
+# dpcr port back 2026-11-05 (owner: "move dppb's braking over as it is, I test it"): dppb's engage onset + hold.
+# dragonpilot (dpcr, owner 2026-11-03; dppb port 2026-11-04): "at mid / low speed, the first 0.1 s of the brake on the
+# first SET / RESUME press should be softer". Engaging with a lead (or a set speed) that needs braking, the planner's
+# target is applied at once and carcontroller's 4 m/s^3 wind-down is the only limit: -0.4 m/s^2 after 0.1 s, felt as a
+# bite. A brake that starts within ENGAGE_ONSET_WINDOW of engaging builds with a jerk rising from ENGAGE_ONSET_J0 to
+# ENGAGE_ONSET_J1 over ENGAGE_ONSET_T (-0.15 at 0.1 s, -0.40 at 0.2 s; stock -0.4 / -0.8), then keeps climbing
+# linearly at the stock ENGAGE_ONSET_J_STOCK until the planner's request is reached (-0.8 at 0.3 s, ~-1.6 at 0.5 s).
+# dppb (Altis, owner 2026-11-04, after 11-04 13:24: engaged 44 m behind a stopped car at 45 km/h, stopped 2.1 m out):
+# "keep the start soft, then climb linearly; if it cannot be higher at 0.5 s keep climbing after it, and hold the
+# firmest brake a little longer, so the stop ends at 3-3.5 m". So after the onset, for the rest of this stop, behind a
+# radar lead that has been stopped for ENGAGE_HOLD_LEAD_T: the decel the part of the stop above ENGAGE_HOLD_V_TAIL
+# needs (lead distance less the lag travel, ENGAGE_HOLD_GAP and the distance the normal end from V_TAIL takes,
+# ENGAGE_HOLD_D_TAIL - Altis 33 stops: median 7.4 m, p75 11.3) is compared with the planner's request; where the plan
+# releases earlier the brake is held, at most ENGAGE_HOLD_MAX more and NEVER firmer than this stop's own firmest
+# planner request so far (it holds the peak longer, it never deepens it). It builds at ENGAGE_HOLD_UP, lets go at
+# ENGAGE_HOLD_DOWN, fades out between ENGAGE_HOLD_FADE_V km/h so the normal end (soft end, stop end level) is left as
+# it is, and stops ENGAGE_HOLD_MAX_T after the onset. Owner-approved exception to "never firmer than the planner",
+# only for this engage stop. Closed-loop sim of 13:24 (dppb x86 MPC, recorded car + 0.4 s lagged command difference):
+# stock 2.53 m, soft onset only 2.39 m, with the hold 3.07 m; peak command -2.85 (stock -2.78), held to ~15 km/h.
+ENGAGE_ONSET_WINDOW = 1.0   # s after engaging in which a brake onset gets the soft start
+ENGAGE_ONSET_J0 = 1.0       # m/s^3 at the start of the brake
+ENGAGE_ONSET_J1 = 3.0       # m/s^3 at ENGAGE_ONSET_T
+ENGAGE_ONSET_T = 0.2        # s: the soft part
+ENGAGE_ONSET_J_STOCK = 4.0  # m/s^3 after it (stock carcontroller wind-down limit), until the request is reached
+
+# dppb (owner 2026-11-05, exception to "never lighter than the planner" approved): "when a car cuts in, start the brake
+# soft but climb quickly to the planner's force; keep it simple". 21:53:33 at 56 km/h, accelerating +0.6, a car cut in
+# 19 m ahead at 48 km/h and the brake felt too strong at the front. So a brake that starts after BRAKE_ONSET_COAST_T
+# without braking (accelerating or coasting: every cut-in) gets the same curve as the engage onset: -0.15 at 0.1 s,
+# -0.40 at 0.2 s, then the stock ENGAGE_ONSET_J_STOCK until the planner's request is reached. A planner that builds
+# slower is untouched.
+BRAKE_ONSET_FROM = -0.1      # m/s^2: "not braking" is a command at or above this
+BRAKE_ONSET_COAST_T = 0.5    # s not braking before a new onset
+ENGAGE_HOLD_MAX_T = 15.0    # s after the onset
+ENGAGE_HOLD_LEAD_V = 1.0    # m/s: lead counted as stopped below this
+ENGAGE_HOLD_LEAD_T = 0.5    # s the lead must have been stopped
+ENGAGE_HOLD_GAP = 3.3       # m
+ENGAGE_HOLD_LAG = 0.5       # s
+ENGAGE_HOLD_V_TAIL = 12.0   # km/h: below this the stop is the normal end's
+ENGAGE_HOLD_D_TAIL = 9.0    # m the normal end takes from ENGAGE_HOLD_V_TAIL
+ENGAGE_HOLD_FADE_V = [12.0, 20.0]  # km/h: no hold below the first, full above the second (11-05: was 10-15)
+ENGAGE_HOLD_MAX = 0.6       # m/s^2 at most held beyond the planner
+ENGAGE_HOLD_UP = 2.0        # m/s^3
+ENGAGE_HOLD_DOWN = 0.5      # m/s^3 (11-05: was 1.0)
 
 # dragonpilot (dpcr, owner 2026-11-03): the end of a stop behind a stopped lead at tncr1's level. Owner: "the brake gets
 # heavier at 3-5 km/h, too much; tncr1's slight firming there is comfortable - make dpcr the same as tncr1, check it
@@ -140,6 +171,13 @@ class LongControl:
     self.soft_end_frac = 1.0
     self.engage_t = 0.0  # s since engaging
     self.onset_t: float | None = None  # s since the soft brake onset began (None: not in one)
+    self.onset_done = False  # the onset ramp reached the request
+    self.hold = 0.0  # <= 0: brake held beyond the planner in this engage stop
+    self.hold_peak = 0.0  # this engage stop's firmest planner request so far
+    self.hold_lead_t = 0.0  # s the lead has been stopped
+    self.bo_t: float | None = None  # s since a brake onset (while driving) began
+    self.bo_ramp = 0.0
+    self.coast_t = 0.0  # s without braking
     self.lead = None  # radarState.leadOne, set by controlsd every frame (None: no radarState)
 
   def reset(self):
@@ -226,16 +264,57 @@ class LongControl:
     if self.long_control_state == LongCtrlState.off:
       # off because the driver is on the gas (override) is not an engagement: releasing the gas gets no soft onset
       self.engage_t, self.onset_t = (ENGAGE_ONSET_WINDOW + 1.0 if getattr(CS, "gasPressed", False) else 0.0), None
+      self.onset_done, self.hold, self.hold_peak, self.hold_lead_t = False, 0.0, 0.0, 0.0
+      self.bo_t, self.coast_t = None, 0.0
       return output_accel
     self.engage_t += DT_CTRL
     if self.onset_t is None:
       # the onset starts with the first frame that asks for more brake than the last one, below zero, within the window
       if self.engage_t > ENGAGE_ONSET_WINDOW or CS.standstill or self.long_control_state != LongCtrlState.pid or \
          output_accel >= min(self.last_output_accel, 0.0):
-        return output_accel
+        return self.brake_onset(output_accel, CS)
       self.onset_t = 0.0
-    if self.onset_t >= ENGAGE_ONSET_T:
-      return output_accel  # done: stock limits from here on (onset_t stays, so only once per engagement)
-    jerk = ENGAGE_ONSET_J0 + (ENGAGE_ONSET_J1 - ENGAGE_ONSET_J0) * self.onset_t / ENGAGE_ONSET_T
+    t = self.onset_t
     self.onset_t += DT_CTRL
-    return max(output_accel, min(self.last_output_accel, 0.0) - jerk * DT_CTRL)
+    if not self.onset_done:
+      jerk = ENGAGE_ONSET_J0 + (ENGAGE_ONSET_J1 - ENGAGE_ONSET_J0) * t / ENGAGE_ONSET_T if t < ENGAGE_ONSET_T else ENGAGE_ONSET_J_STOCK
+      ramp = min(self.last_output_accel, 0.0) - jerk * DT_CTRL
+      if output_accel < ramp:
+        return ramp
+      self.onset_done = True  # request reached: the hold below from here on
+    return self.brake_onset(self.engage_hold(output_accel, CS), CS)
+
+  def brake_onset(self, output_accel, CS):
+    if self.bo_t is None:
+      self.coast_t = 0.0 if self.last_output_accel < BRAKE_ONSET_FROM else self.coast_t + DT_CTRL
+      if self.coast_t < BRAKE_ONSET_COAST_T or output_accel >= BRAKE_ONSET_FROM or CS.standstill or \
+         self.long_control_state != LongCtrlState.pid:
+        return output_accel
+      self.bo_t, self.bo_ramp = 0.0, min(self.last_output_accel, 0.0)
+    t = self.bo_t
+    self.bo_t += DT_CTRL
+    jerk = ENGAGE_ONSET_J0 + (ENGAGE_ONSET_J1 - ENGAGE_ONSET_J0) * t / ENGAGE_ONSET_T if t < ENGAGE_ONSET_T else ENGAGE_ONSET_J_STOCK
+    self.bo_ramp -= jerk * DT_CTRL
+    if output_accel < self.bo_ramp:
+      return self.bo_ramp
+    self.bo_t, self.coast_t = None, 0.0  # the planner's request is reached
+    return output_accel
+
+  def engage_hold(self, output_accel, CS):
+    lead = self.lead
+    still = lead is not None and lead.status and lead.vLead < ENGAGE_HOLD_LEAD_V
+    self.hold_lead_t = self.hold_lead_t + DT_CTRL if still else 0.0
+    want = 0.0
+    if self.onset_t < ENGAGE_HOLD_MAX_T and not CS.standstill and self.hold_lead_t >= ENGAGE_HOLD_LEAD_T and output_accel < 0.0:
+      vt = ENGAGE_HOLD_V_TAIL / 3.6
+      room = lead.dRel - CS.vEgo * ENGAGE_HOLD_LAG - ENGAGE_HOLD_GAP - ENGAGE_HOLD_D_TAIL
+      b_need = max(CS.vEgo ** 2 - vt ** 2, 0.0) / (2.0 * max(room, 0.5))
+      cap = ENGAGE_HOLD_MAX * float(np.interp(CS.vEgo * 3.6, ENGAGE_HOLD_FADE_V, [0.0, 1.0]))
+      want = float(np.clip(-b_need - output_accel, -cap, 0.0))
+    if want < self.hold:
+      self.hold = max(want, self.hold - ENGAGE_HOLD_UP * DT_CTRL)
+    else:
+      self.hold = min(want, self.hold + ENGAGE_HOLD_DOWN * DT_CTRL)
+    # hold, never deepen: never firmer than this stop's own firmest planner request so far
+    self.hold_peak = min(self.hold_peak, output_accel)
+    return max(output_accel + self.hold, min(self.hold_peak, output_accel))
