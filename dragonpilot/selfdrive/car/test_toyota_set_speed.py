@@ -148,6 +148,28 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
       self.long_press(ButtonType.decelCruise)
     self.assertEqual(self.helper.v_cruise_kph, 0.)
 
+  def test_holding_minus_keeps_lowering_by_10_every_second(self):
+    # owner 2026-11-05: holding - must keep going down 10 at a time without releasing
+    L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
+    self.engage_with_set()
+    self.step(events=[(ButtonType.decelCruise, True)])
+    self.step(n=L - 5)
+    start = self.helper.v_cruise_cluster_kph  # nothing yet before 1 s
+    self.step(n=10)
+    first = self.helper.v_cruise_cluster_kph
+    self.assertLess(first, start)
+    self.assertEqual(first % 5, 0)
+    self.step(n=L)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, first - LONG_PRESS_DOWN)
+    self.step(n=L)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, first - 2 * LONG_PRESS_DOWN)
+    self.step(events=[(ButtonType.decelCruise, False)])  # the release adds nothing
+    self.assertEqual(self.helper.v_cruise_cluster_kph, first - 2 * LONG_PRESS_DOWN)
+    self.step(events=[(ButtonType.decelCruise, True)])
+    self.step(n=20 * L)  # held long enough: down to the stop target and no further
+    self.step(events=[(ButtonType.decelCruise, False)])
+    self.assertEqual(self.helper.v_cruise_kph, 0.)
+
   def test_res_from_zero_at_standstill_returns_to_the_ceiling(self):
     self.engage_with_set()
     for _ in range(25):
