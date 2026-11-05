@@ -8,8 +8,8 @@ planner's cruise target becomes the speed one step of a SCHEDULED decel ahead (t
 
 - eco (driveMode 0): never hurry, however far the set speed dropped or how many presses. Owner 2026-11-05 night
   ("after the last mid/high-speed -5 change the decel became too slow; keep that slow decel above 100 km/h only, below
-  100 the decel rises slowly until the set speed nears 20"): one straight line from -0.30 at 100 km/h to -0.50 at
-  20 km/h (0.0025 m/s^2 firmer per km/h), then easing linearly to the end value at 0. Replaces the 10-27 / 11-03
+  100 the decel rises slowly until the set speed nears 20"); then (11-05 late) -0.30 from 100 down to 80 km/h, one
+  straight line to -1.00 at 20 km/h, -0.50 at 10 km/h and -0.34 (the end value) at 0. Replaces the 10-27 / 11-03
   schedule (pure coasting at 70-80 km/h, -0.40 at 60, -0.50 at 30) and its pitch-aware coast blend below 100 km/h.
 - normal / sport: one constant decel latched when the gap opens (gap / 3.5 s, 3.0 s), never gentler than -0.50 /
   -0.65, held to the target.
@@ -18,7 +18,7 @@ planner's cruise target becomes the speed one step of a SCHEDULED decel ahead (t
   (half: -0.15 on the flat instead of -0.30), so the PCM keeps some throttle; blended from the mode's value between
   95 and 100 km/h (was 75-80).
 - set speed down to 0 (owner 2026-11-05, both cars): "set 0 from 35 km/h and up follows the -5 principle; the brake is
-  firmest at 30 and 20 km/h, then eases linearly to the stop". The eco line is firmest at 20 km/h (-0.50; -0.475 at 30)
+  firmest at 30 and 20 km/h, then eases linearly to the stop". The eco line is firmest at 20 km/h (-1.00; -0.88 at 30)
   and eases linearly to the end value at 0 (-0.34, owner 11-05 night: back to -0.34); a target below LOW_TARGET_MAX (the new 25 ... 0 settings) follows the
   eco line in every drive mode (a latched normal / sport decel would be firmest at the start, gap / 3.5 s from 60 km/h
   is beyond -1.2), so its firmest part is always at 30-20 km/h.
@@ -33,8 +33,10 @@ import numpy as np
 
 ECO, NORMAL, SPORT = 0, 1, 2  # carState.driveMode
 
-ECO_DECEL_BP = [0., 20. / 3.6, 100. / 3.6, 120. / 3.6]  # m/s (0, 20, 100, 120 km/h)
-ECO_DECEL_V = [-0.34, -0.50, -0.30, -0.30]              # m/s^2 (owner 11-05 night); >= 100 km/h only the coast fallback
+# owner 2026-11-05 late: "80 km/h -0.3, 20 km/h -1.0, 10 km/h -0.5, then converge to -0.34 at 0" (set 0 at mid/high
+# speed did not slow enough at low speed); 80-100 km/h stays -0.30, half-coast easing above 100 as before
+ECO_DECEL_BP = [0., 10. / 3.6, 20. / 3.6, 80. / 3.6, 100. / 3.6, 120. / 3.6]  # m/s (0, 10, 20, 80, 100, 120 km/h)
+ECO_DECEL_V = [-0.34, -0.50, -1.00, -0.30, -0.30, -0.30]                      # m/s^2; >= 100 km/h only the coast fallback
 LOW_TARGET_MAX = 22.0 / 3.6                              # m/s: targets below it (dial 25 ... 0) use the eco line in every mode
 COAST_MIN, COAST_MAX = -1.2, -0.05                       # m/s^2: sanity clip on the planner's coast accel
 LATCH_RESPONSE_T = {NORMAL: 3.5, SPORT: 3.0}             # s to close the gap
