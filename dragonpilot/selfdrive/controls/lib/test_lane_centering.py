@@ -85,3 +85,22 @@ class TestLaneCentering(unittest.TestCase):
 
 if __name__ == "__main__":
   unittest.main()
+
+
+def test_no_position_feedback_during_a_lane_change():
+  # dpcr 2026-11-05: the PD must not push toward the new lane's centre or wind up its integral while changing lanes
+  from types import SimpleNamespace as N
+  import numpy as np
+  X = [0., 2., 4., 6., 8., 10., 12., 15., 18., 21., 25., 30., 35., 40., 45., 50., 55., 60., 70., 80.]
+  def model(offset):
+    c = np.array([offset for _ in X])
+    left = N(x=X, y=list(c - 1.65)); right = N(x=X, y=list(c + 1.65))
+    return N(laneLines=[left, left, right, right], laneLineProbs=[0.9] * 4, frameId=0, meta=N(laneChangeState=2))
+  lc = LaneCentering(0.01)
+  v = 100 / 3.6
+  for _ in range(300):
+    lc.update(model(0.4), v, True, False, 0.0, 0.0, False)
+  assert lc.correction > 0.0 and lc.integral > 0.0
+  for _ in range(500):
+    lc.update(model(-0.8), v, True, False, 0.0, 0.0, True)  # changing lanes: the new lane's centre far away
+  assert lc.integral == 0.0 and abs(lc.correction) < 1e-9

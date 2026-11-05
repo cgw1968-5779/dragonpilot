@@ -281,7 +281,13 @@ class LaneCentering:
              model_curvature: float | None = None, lane_changing: bool = False) -> float:
     """Curvature to ADD to the desired curvature (positive = right). straight: tncr straight mode weight (0..1).
     model_curvature: the desired curvature this is added to (enables line mode); lane_changing: hand back to the model."""
-    meas = self.measure(model_v2) if active and not steering_pressed and v_ego > LANE_CENTER_MIN_SPEED else None
+    # dpcr (owner 2026-11-05 late: "after a lane change, in one or two places the correction felt sharp"): no position
+    # feedback during a lane change. Route e4 rlog: the PD kept pushing toward the NEW lane's centre (+-0.2..0.33 m/s^2,
+    # on top of the model's own manoeuvre) and its integral wound up to +-0.10 m/s^2, which then pushed the car 10-13 cm
+    # past the centre after the change. Like lost lines: the correction winds down at the jerk limit and the integral
+    # restarts at 0 once the change is over. Closed-loop sim (route e0, 3 changes): offset peak in the 8 s after a change
+    # 44 -> 24 cm, correction peak 0.32 -> 0.10 m/s^2.
+    meas = self.measure(model_v2) if active and not steering_pressed and not lane_changing and v_ego > LANE_CENTER_MIN_SPEED else None
     self.last_meas = meas
     tau = blend(LANE_CENTER_FILTER_TAU, STRAIGHT_CENTER_TAU, straight)
     self.offset_filter.update_alpha(tau)
