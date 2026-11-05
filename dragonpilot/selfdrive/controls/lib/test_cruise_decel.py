@@ -51,3 +51,28 @@ def test_normal_latches_one_decel():
   d2 = c.decel(cd.NORMAL, 58 * KPH, 55 * KPH, FLAT_COAST)
   assert d1 == cd.LATCH_MIN_DECEL[cd.NORMAL]
   assert d2 == max(d1, (55 - 58) * KPH / cd.TAPER_T)
+
+
+def test_set_zero_firmest_at_30_to_20_then_linear_to_the_end():
+  # owner 2026-11-05: set 0 from 35 km/h and up: firmest at 30 and 20 km/h, then easing linearly to the stop
+  c = cd.CruiseDecel()
+  d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (60, 45, 35, 30, 25, 20, 15, 10, 5)}
+  assert abs(d[30] - -0.50) < 1e-3 and abs(d[25] - -0.50) < 1e-3 and abs(d[20] - -0.50) < 1e-3
+  assert d[60] > d[45] > d[35] > d[30] - 1e-9
+  assert d[20] < d[15] < d[10] < d[5] < cd.ECO_DECEL_V[0] + 1e-9
+  assert abs((d[15] - d[10]) - (d[10] - d[5])) < 1e-9  # linear
+  assert min(d.values()) >= -0.50 - 1e-9
+
+
+def test_low_target_uses_the_eco_line_in_every_mode():
+  for mode in (cd.NORMAL, cd.SPORT):
+    c = cd.CruiseDecel()
+    assert abs(c.decel(mode, 60 * KPH, 0.0, FLAT_COAST) - cd.CruiseDecel().decel(cd.ECO, 60 * KPH, 0.0, FLAT_COAST)) < 1e-9
+    assert c.decel(mode, 60 * KPH, 30 * KPH, FLAT_COAST) <= cd.LATCH_MIN_DECEL[mode]  # 30 and up: latched as before
+
+
+def test_set_zero_lands_at_zero():
+  c = cd.CruiseDecel()
+  for v in np.arange(3.0, 0.0, -0.05):
+    out = c.update(cd.ECO, v * KPH, 0.0, FLAT_COAST, False)
+    assert 0.0 <= out < v * KPH

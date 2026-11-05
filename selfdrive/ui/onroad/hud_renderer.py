@@ -91,7 +91,7 @@ class HudRenderer(Widget):
     self.set_speed = (
       controls_state.deprecated.vCruise if v_cruise_cluster == 0.0 else v_cruise_cluster
     )
-    self.is_cruise_set = 0 < self.set_speed < SET_SPEED_NA
+    self.is_cruise_set = 0 <= self.set_speed < SET_SPEED_NA  # dragonpilot hook: 0 is the stop target (owner 2026-11-05)
     self.is_cruise_available = self.set_speed != -1
 
     if self.is_cruise_set and not ui_state.is_metric:

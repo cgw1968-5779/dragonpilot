@@ -160,7 +160,7 @@ class HudRenderer(Widget):
       self._set_speed_changed_time = rl.get_time()
     self._engaged = engaged
     self.set_speed = set_speed
-    self.is_cruise_set = 0 < self.set_speed < SET_SPEED_NA
+    self.is_cruise_set = 0 <= self.set_speed < SET_SPEED_NA  # dragonpilot hook: 0 is the stop target (owner 2026-11-05)
     self.is_cruise_available = self.set_speed != -1
 
     v_ego_cluster = car_state.vEgoCluster

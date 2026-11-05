@@ -3,6 +3,8 @@ import numpy as np
 
 from cereal import car
 from openpilot.common.constants import CV
+from opendbc.car.toyota.software_set_speed import software_set_speed
+from dragonpilot.selfdrive.car.toyota_set_speed import ToyotaSoftwareSetSpeed
 
 
 # WARNING: this value was determined based on the model's training distribution,
@@ -36,6 +38,7 @@ class VCruiseHelper:
     self.v_cruise_kph_last = 0
     self.button_timers = {ButtonType.decelCruise: 0, ButtonType.accelCruise: 0}
     self.button_change_states = {btn: {"standstill": False, "enabled": False} for btn in self.button_timers}
+    self.toyota_sss = ToyotaSoftwareSetSpeed() if software_set_speed(CP) else None  # dragonpilot hook
 
   @property
   def v_cruise_initialized(self):
@@ -43,6 +46,8 @@ class VCruiseHelper:
 
   def update_v_cruise(self, CS, enabled, is_metric):
     self.v_cruise_kph_last = self.v_cruise_kph
+    if self.toyota_sss is not None:
+      return self.toyota_sss.update(self, CS, enabled, is_metric)  # dragonpilot hook
 
     if CS.cruiseState.available:
       if not self.CP.pcmCruise:
