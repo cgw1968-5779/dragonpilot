@@ -109,7 +109,7 @@ LINE_V_BP = [70.0 / 3.6, 80.0 / 3.6]  # m/s: line mode fades in with the PD cent
 # also takes ~25 % more wheel angle at the lower speed). Now full line mode (x LINE_W_MAX) from 80 km/h true (dash ~88).
 LINE_V_W = [0.0, 1.0]
 LINE_MIN_PROB = 0.7         # both near lines at least this (the PD centering accepts 0.5 / 0.4)
-LINE_T_LOOK = 2.0           # s of travel to the pursued point on the line centre
+LINE_T_LOOK = 1.7           # s of travel to the pursued point on the line centre (dpcr 11-05 late, with LINE_PRED_T; tncr1 2.0)
 # 1.5 -> 2.0 s (owner 2026-10-25 after route b5): at 100-110 km/h the car swayed +-10..15 cm with a ~4.5 s period (22:02,
 # angle 2-5 deg); 61-84 % of the offset's energy sat in the 3-7 s band vs 39-56 % with the model's path (route a9), and
 # the actual lateral accel lagged the request by 0.15-0.25 m/s^2 at the peaks: the pursuit loop is lightly damped on
@@ -122,6 +122,14 @@ LINE_W_MAX = 0.85  # dpcr (owner 2026-11-05 "as strong as possible"): between tn
 # 1.0 -> 0.7 (owner 2026-10-26, highway): smaller, more even corrections. At most 70 % of the line pursuit; the other
 # 30 % stays with the PD correction of the model's path, so each pursuit correction is cut to 0.7x and a jumpy line
 # estimate moves the wheel less (effective pursuit gain 0.35 m/s^2 per metre at T 2.0 s, was 0.50).
+# dpcr (owner 2026-11-05 late, "try it"): pursue from where the car will be after the steering delay. Route 000000e4
+# (rlog segs 26-41, 91 km/h, this centering on): the fast wobble was already tiny (position < 2 s +-0.5 cm, 2-4 s +-1.5),
+# what was left was a slow weave (4-10 s +-6.8 cm) and drift (> 10 s +-6.5), and the actual curvature lagged the command
+# by 0.36 s - the pursuit kept pushing after the car was already coming back. So the chord starts at the pose LINE_PRED_T
+# ahead on the arc of the last command (no extra fit), and the lookahead is 1.7 s (was 2.0). Closed-loop sim on route
+# e0, 85-100 km/h, std of the 15 m-ahead offset: straight 12.6 -> 11.4, left curves 11.8 -> 10.7, right 11.6 -> 10.9 cm;
+# command jerk p95 0.86 -> 0.81 (75-85 km/h right curves 8.6 -> 9.0 cm inside). Return point: tag dpcr-lat-good-20261105.
+LINE_PRED_T = 0.36          # s: measured command -> actual curvature delay (route e4)
 LINE_W_RISE = 0.5           # 1/s: 2 s to take over
 LINE_W_FALL = 2.0           # 1/s: 0.5 s to hand back
 LINE_FILTER_TAU = 0.1       # s; low-pass on the line curvature (0.3 oscillated in the closed-loop sim with 0.5 s steering lag)
@@ -143,6 +151,7 @@ class LaneCentering:
     self.line_filter = FirstOrderFilter(0.0, LINE_FILTER_TAU, dt)
     self.line_valid = False
     self.output = 0.0  # what update() returned (correction blended with line mode)
+    self.k_prev = 0.0  # last commanded curvature (model + output), for the delay prediction
     self.fit_key = None  # model frame the lane-centre fits below belong to
     self.fit_x = np.zeros(0)
     self.fit_centre = np.zeros(0)
@@ -182,25 +191,30 @@ class LaneCentering:
     self.output = 0.0
 
   def line_curvature(self, model_v2, v_ego: float) -> float | None:
-    """Pure pursuit of the lane-line centre LINE_T_LOOK ahead (curvature, positive = right). None unless both near
-    lines are confident and seen far enough; call only after measure() accepted the pair (width checks)."""
+    """Pure pursuit of the lane-line centre LINE_T_LOOK ahead (curvature, positive = right), from the pose LINE_PRED_T
+    ahead on the arc of the last command. None unless both near lines are confident and seen far enough; call only
+    after measure() accepted the pair (width checks)."""
     info = self._frame_info(model_v2)
     if info is None or info[0] < LINE_MIN_PROB:
       return None
     look = min(max(v_ego * LINE_T_LOOK, LINE_L_RANGE[0]), LINE_L_RANGE[1])
+    xd = v_ego * LINE_PRED_T
     nx, x_last, same_len = info[4:]
-    if nx < 4 or x_last < look + LINE_FIT_MARGIN or not same_len:
+    if nx < 4 or x_last < xd + look + LINE_FIT_MARGIN or not same_len:
       return None
-    _, fit = self.centre_fit(model_v2, look + LINE_FIT_MARGIN)
+    _, fit = self.centre_fit(model_v2, xd + look + LINE_FIT_MARGIN)
     if fit is None:
       return None
-    y_look = float((fit[0] * look + fit[1]) * look + fit[2])
-    return 2.0 * y_look / (look ** 2 + y_look ** 2)
+    k = self.k_prev
+    x = xd + look
+    dy = float((fit[0] * x + fit[1]) * x + fit[2]) - k * xd * xd / 2.0 - k * xd * look
+    return 2.0 * dy / (look ** 2 + dy ** 2)
 
   def _line_mode(self, model_v2, v_ego: float, meas_ok: bool, model_curvature: float | None, lane_changing: bool) -> float:
     """Blend the PD correction (self.correction) with the line-centre curvature; returns the curvature to add."""
     if model_curvature is None:
       return self.correction
+    self.k_prev = model_curvature + self.output  # the last command: the arc the car is on through the delay
     k_line = self.line_curvature(model_v2, v_ego) if meas_ok and not lane_changing else None
     trusted = k_line is not None and abs(k_line - model_curvature) * v_ego ** 2 <= LINE_MAX_DIFF_ACCEL
     if trusted:

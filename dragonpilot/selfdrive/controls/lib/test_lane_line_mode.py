@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from dragonpilot.selfdrive.controls.lib.lane_centering import LaneCentering, LINE_T_LOOK, LINE_W_MAX
+from dragonpilot.selfdrive.controls.lib.lane_centering import LaneCentering, LINE_T_LOOK, LINE_W_MAX, LINE_PRED_T
 
 DT = 0.01
 X = [0., 2., 4., 6., 8., 10., 12., 15., 18., 21., 25., 30., 35., 40., 45., 50., 55., 60., 70., 80.]
@@ -40,7 +40,11 @@ def test_takes_over_with_confident_lines_and_pursues_the_centre():
   out = _run(lc, _model(offset=0.2), v, 0.0, 3.0)  # car 0.2 m LEFT of centre, model goes straight
   assert lc.line_w == LINE_W_MAX
   look = v * LINE_T_LOOK
-  pursuit = 2 * 0.2 / (look ** 2 + 0.04)  # steers right, pure pursuit
+  # dpcr: pursuit from the pose LINE_PRED_T ahead on the arc of the last command (the car already turning right)
+  xd, k = v * LINE_PRED_T, lc.k_prev
+  dy = 0.2 - k * xd ** 2 / 2 - k * xd * look
+  pursuit = 2 * dy / (look ** 2 + dy ** 2)  # steers right, pure pursuit
+  assert 0.0 < pursuit < 2 * 0.2 / (look ** 2 + 0.04)  # less than from the current pose: no overshoot push
   assert abs(out - (LINE_W_MAX * pursuit + (1 - LINE_W_MAX) * lc.correction)) < 1e-5
 
 
