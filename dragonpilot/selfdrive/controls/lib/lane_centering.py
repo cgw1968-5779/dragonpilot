@@ -22,6 +22,11 @@ def blend(normal: float, straight: float, w: float) -> float:
   return normal + (straight - normal) * w
 
 
+def _clip(x, lo, hi) -> float:
+  # scalar clip: np.clip on a single number costs ~4 us per call (6 per 100 Hz cycle here); same result
+  return float(min(max(x, lo), hi))
+
+
 # tncr1 straight mode (not ported: straight weight is always 0, these are only the blend's other end)
 STRAIGHT_CENTER_DEADBAND = 0.015  # m
 STRAIGHT_CENTER_TAU = 0.25       # s
@@ -142,6 +147,8 @@ class LaneCentering:
     self.fit_x = np.zeros(0)
     self.fit_centre = np.zeros(0)
     self.fits: dict[int, np.ndarray] = {}
+    self.info_key = None  # model frame self.info belongs to
+    self.info = None
 
   def centre_fit(self, model_v2, x_max: float) -> tuple[int, np.ndarray | None]:
     """Quadratic fit (c2, c1, c0) of the lane-line centre over the points with x <= x_max, and how many points that is.
@@ -177,12 +184,12 @@ class LaneCentering:
   def line_curvature(self, model_v2, v_ego: float) -> float | None:
     """Pure pursuit of the lane-line centre LINE_T_LOOK ahead (curvature, positive = right). None unless both near
     lines are confident and seen far enough; call only after measure() accepted the pair (width checks)."""
-    lines, probs = model_v2.laneLines, model_v2.laneLineProbs
-    if min(probs[1], probs[2]) < LINE_MIN_PROB:
+    info = self._frame_info(model_v2)
+    if info is None or info[0] < LINE_MIN_PROB:
       return None
-    look = float(np.clip(v_ego * LINE_T_LOOK, *LINE_L_RANGE))
-    nx = len(lines[1].x)
-    if nx < 4 or lines[1].x[nx - 1] < look + LINE_FIT_MARGIN or len(lines[2].y) != nx:
+    look = min(max(v_ego * LINE_T_LOOK, LINE_L_RANGE[0]), LINE_L_RANGE[1])
+    nx, x_last, same_len = info[4:]
+    if nx < 4 or x_last < look + LINE_FIT_MARGIN or not same_len:
       return None
     _, fit = self.centre_fit(model_v2, look + LINE_FIT_MARGIN)
     if fit is None:
@@ -208,38 +215,53 @@ class LaneCentering:
     self.line_valid = trusted
     w_target = LINE_W_MAX * float(np.interp(v_ego, LINE_V_BP, LINE_V_W)) if trusted else 0.0
     rate = LINE_W_RISE if w_target > self.line_w else LINE_W_FALL
-    self.line_w = float(np.clip(w_target, self.line_w - rate * self.dt, self.line_w + rate * self.dt))
+    self.line_w = _clip(w_target, self.line_w - rate * self.dt, self.line_w + rate * self.dt)
     return (1.0 - self.line_w) * self.correction + self.line_w * (self.line_filter.x - model_curvature)
+
+  def _frame_info(self, model_v2):
+    """per model frame (20 Hz), not per control cycle (100 Hz): the lane-line reads, the width and the near fit.
+    dpcr 2026-11-05: with the centering on, the C4's core 4 went 68 -> 81 % (p95 88 -> 92 %) at highway speed, and
+    tncr1 once lagged ('System Lagging', route b8 10-26) from per-cycle work here; the outputs are unchanged."""
+    key = (id(model_v2), getattr(model_v2, 'frameId', None))
+    if key == self.info_key:
+      return self.info
+    self.info_key = key
+    self.info = None
+    lines = model_v2.laneLines
+    probs = model_v2.laneLineProbs
+    if len(lines) < 4 or len(probs) < 4 or len(lines[1].y) < 4 or len(lines[2].y) < 4:
+      return None
+    p1, p2 = float(probs[1]), float(probs[2])
+    width = float(lines[2].y[0]) - float(lines[1].y[0])
+    _, fit = self.centre_fit(model_v2, LANE_CENTER_FIT_RANGE)
+    # centre(x) ~ c0 + c1 x + c2 x^2: c0 is the centre's lateral position (right of the car), c1 its slope. A lane
+    # that runs to the right ahead (c1 > 0) means the car is pointing LEFT of it.
+    meas = None if fit is None else (float(fit[2]), float(math.atan(fit[1])))
+    nx = len(lines[1].x)
+    self.info = (min(p1, p2), max(p1, p2), width, meas, nx, float(lines[1].x[nx - 1]) if nx else 0.0, len(lines[2].y) == nx)
+    return self.info
 
   def measure(self, model_v2) -> tuple[float, float] | None:
     """(offset, heading) of the car relative to the lane centre: offset positive = car LEFT of centre, heading
     positive = car pointing LEFT of the lane direction. None when the lines are unreliable."""
     if model_v2 is None:
       return None
-    lines = model_v2.laneLines
-    probs = model_v2.laneLineProbs
-    if len(lines) < 4 or len(probs) < 4 or len(lines[1].y) < 4 or len(lines[2].y) < 4:
+    info = self._frame_info(model_v2)
+    if info is None:
       return None
-    if max(probs[1], probs[2]) < LANE_CENTER_MIN_LINE_PROB or min(probs[1], probs[2]) < LANE_CENTER_MIN_OTHER_PROB:
+    p_lo, p_hi, width, meas = info[:4]
+    if p_hi < LANE_CENTER_MIN_LINE_PROB or p_lo < LANE_CENTER_MIN_OTHER_PROB:
       return None
-    yl, yr = lines[1].y[0], lines[2].y[0]
-    width = yr - yl
     if not (LANE_CENTER_WIDTH_RANGE[0] <= width <= LANE_CENTER_WIDTH_RANGE[1]):
       return None
     if self.width_filter.x > 0.0 and abs(width - self.width_filter.x) > LANE_CENTER_WIDTH_TOL:
       return None  # one of the two lines is not this lane's (a lost outer line placed somewhere else)
-    if min(probs[1], probs[2]) >= LANE_CENTER_WIDTH_CONF_PROB:
+    if p_lo >= LANE_CENTER_WIDTH_CONF_PROB:
       if self.width_filter.x > 0.0:
         self.width_filter.update(width)
       else:
         self.width_filter.x = width
-    _, fit = self.centre_fit(model_v2, LANE_CENTER_FIT_RANGE)
-    if fit is None:
-      return None
-    # centre(x) ~ c0 + c1 x + c2 x^2: c0 is the centre's lateral position (right of the car), c1 its slope. A lane
-    # that runs to the right ahead (c1 > 0) means the car is pointing LEFT of it.
-    c2, c1, c0 = fit
-    return float(c0), float(math.atan(c1))
+    return meas
 
   def update(self, model_v2, v_ego: float, active: bool, steering_pressed: bool, straight: float = 0.0,
              model_curvature: float | None = None, lane_changing: bool = False) -> float:
@@ -259,22 +281,22 @@ class LaneCentering:
       self.heading_filter.x = 0.0
       self.integral = 0.0
       self.valid = False
-      self.correction = float(np.clip(0.0, self.correction - step, self.correction + step))
+      self.correction = _clip(0.0, self.correction - step, self.correction + step)
       self.output = self._line_mode(model_v2, v_ego, False, model_curvature, lane_changing)
       return self.output
 
     self.valid = True
     self.offset = self.offset_filter.update(meas[0])
     self.heading = self.heading_filter.update(meas[1])
-    error = self.offset - float(np.clip(self.offset, -deadband, deadband))  # deadband
+    error = self.offset - _clip(self.offset, -deadband, deadband)  # deadband
     lateral_speed = v_ego * math.sin(self.heading)  # positive = drifting LEFT
 
-    self.integral = float(np.clip(self.integral + LANE_CENTER_KI * error * self.dt, -LANE_CENTER_I_LIMIT, LANE_CENTER_I_LIMIT))
+    self.integral = _clip(self.integral + LANE_CENTER_KI * error * self.dt, -LANE_CENTER_I_LIMIT, LANE_CENTER_I_LIMIT)
     lat_accel = LANE_CENTER_KP * error + LANE_CENTER_KD * lateral_speed + self.integral
-    lat_accel = float(np.clip(lat_accel, -LANE_CENTER_MAX_LAT_ACCEL, LANE_CENTER_MAX_LAT_ACCEL))
-    target = float(np.clip(lat_accel / max(v_ego, LANE_CENTER_MIN_SPEED) ** 2, -LANE_CENTER_MAX_CURV, LANE_CENTER_MAX_CURV))
+    lat_accel = _clip(lat_accel, -LANE_CENTER_MAX_LAT_ACCEL, LANE_CENTER_MAX_LAT_ACCEL)
+    target = _clip(lat_accel / max(v_ego, LANE_CENTER_MIN_SPEED) ** 2, -LANE_CENTER_MAX_CURV, LANE_CENTER_MAX_CURV)
     target *= float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V))
-    self.correction = float(np.clip(target, self.correction - step, self.correction + step))
+    self.correction = _clip(target, self.correction - step, self.correction + step)
     self.output = self._line_mode(model_v2, v_ego, True, model_curvature, lane_changing)
     return self.output
 
