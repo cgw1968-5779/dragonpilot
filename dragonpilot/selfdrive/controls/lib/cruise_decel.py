@@ -16,6 +16,11 @@ planner's cruise target becomes the speed one step of a SCHEDULED decel ahead (t
 - NEW, all modes, 80 km/h and up (owner 2026-11-03: "at high speed -5 must slow very smoothly - not lifting off the
   throttle completely but only easing it"): HIGH_FRAC of the pitch-aware coast (half: -0.15 on the flat instead of
   -0.30), so the PCM keeps some throttle; blended from the mode's value between 75 and 80 km/h.
+- set speed down to 0 (owner 2026-11-05, both cars): "set 0 from 35 km/h and up follows the -5 principle; the brake is
+  firmest at 30 and 20 km/h, then eases linearly to the stop". The eco line holds -0.50 from 30 down to 20 km/h and
+  eases linearly to the end value at 0 (-0.34); a target below LOW_TARGET_MAX (the new 25 ... 0 settings) follows the
+  eco line in every drive mode (a latched normal / sport decel would be firmest at the start, gap / 3.5 s from 60 km/h
+  is beyond -1.2), so its firmest part is always at 30-20 km/h.
 - the last second before the set speed: the decel shrinks in proportion to the gap left, and the target never goes
   below the set speed itself (lands without overshoot).
 
@@ -27,8 +32,9 @@ import numpy as np
 
 ECO, NORMAL, SPORT = 0, 1, 2  # carState.driveMode
 
-ECO_DECEL_BP = [0., 8.33, 16.67, 19.44, 25.0, 33.3]     # m/s (0, 30, 60, 70, 90, 120 km/h)
-ECO_DECEL_V = [-0.34, -0.50, -0.40, -0.22, -0.30, -0.40]  # m/s^2; >= 70 km/h only the fallback coast estimate
+ECO_DECEL_BP = [0., 5.56, 8.33, 16.67, 19.44, 25.0, 33.3]       # m/s (0, 20, 30, 60, 70, 90, 120 km/h)
+ECO_DECEL_V = [-0.34, -0.50, -0.50, -0.40, -0.22, -0.30, -0.40]  # m/s^2; >= 70 km/h only the fallback coast estimate
+LOW_TARGET_MAX = 22.0 / 3.6                              # m/s: targets below it (dial 25 ... 0) use the eco line in every mode
 ECO_COAST_BLEND_BP = [16.67, 19.44]                      # m/s: -0.40 at 60 km/h -> pure coast at 70 km/h
 COAST_MIN, COAST_MAX = -1.2, -0.05                       # m/s^2: sanity clip on the planner's coast accel
 ECO_COAST_FLAT = -0.30                                   # m/s^2: descent floor once the set speed is <= 30 km/h
@@ -58,7 +64,7 @@ class CruiseDecel:
     if accel_coast is not None and np.isfinite(accel_coast) and accel_coast < 0.0:
       coast = float(np.clip(accel_coast, COAST_MIN, COAST_MAX))
 
-    if drive_mode == ECO:
+    if drive_mode == ECO or v_target < LOW_TARGET_MAX:
       d = float(np.interp(v_ego, ECO_DECEL_BP, ECO_DECEL_V))
       if coast is not None:
         c = min(coast, ECO_COAST_FLAT) if v_target <= ECO_COAST_FLAT_SET_MAX else coast

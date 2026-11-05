@@ -7,7 +7,7 @@ from cereal import car
 from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import VCruiseHelper, V_CRUISE_UNSET
 from opendbc.car.toyota.software_set_speed import CruiseStalk, software_set_speed
-from dragonpilot.selfdrive.car.toyota_set_speed import (TOYOTA_PCM_SET_SPEED_HEADROOM_KPH, TOYOTA_VIRTUAL_CRUISE_LONG_PRESS,
+from dragonpilot.selfdrive.car.toyota_set_speed import (TOYOTA_PCM_SET_SPEED_HEADROOM_KPH, TOYOTA_VIRTUAL_CRUISE_LONG_PRESS, LONG_PRESS_DOWN,
                                                         toyota_dial_from_canonical, toyota_canonical_from_dial,
                                                         pcm_ceiling_base_kph)
 
@@ -43,6 +43,7 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
 
   def cs(self, events=()):
     CS = car.CarState.new_message()
+    CS.cruiseState.standstill = getattr(self, 'standstill', False)
     CS.cruiseState.available = True
     CS.cruiseState.enabled = self.engaged
     CS.cruiseState.speed = self.pcm_kph * CV.KPH_TO_MS
@@ -108,18 +109,67 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(events=[(ButtonType.decelCruise, False)])
     self.assertEqual(self.helper.v_cruise_cluster_kph, 80.)
 
-  def test_minimum_set_speed(self):
+  def test_presses_reach_the_stop_target_in_5_steps(self):
+    # owner 2026-11-05: below 30 the - presses step 25, 20, 15, 10, 5, 0 (0 = stop target)
     self.engage_with_set()
-    for _ in range(20):
+    seen = []
+    for _ in range(25):
       self.tap(ButtonType.decelCruise, hold_frames=3)
-    self.assertEqual(self.helper.v_cruise_kph, 30.)  # no stop target yet (owner 2026-11-02)
+      seen.append(self.helper.v_cruise_cluster_kph)
+    self.assertEqual(self.helper.v_cruise_kph, 0.)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 0.)
+    self.assertEqual([x for x in seen if x < 31][:7], [30., 25., 20., 15., 10., 5., 0.])
+    self.v_ego_kph = 10.  # rolling: + from 0 steps 5, 10
+    self.tap(ButtonType.accelCruise)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 5.)
+    self.tap(ButtonType.accelCruise)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 10.)
 
-  def test_set_below_minimum_is_raised_like_tncr1(self):
-    # PCM SET at dial 30 (canonical 25.7): tncr1 keeps the canonical target >= 30, so the HUD shows 34.6 (route ae 20:00:05)
+  def test_set_at_pcm_minimum_mirrors_the_dial(self):
+    # PCM SET at dial 30 (canonical 25.7): no 30 km/h canonical floor any more, the HUD shows the dash's 30
     self.pcm_kph, self.pcm_dial_kph = 26., 30.
     self.engage_with_set()
-    self.assertEqual(self.helper.v_cruise_kph, 30.)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 34.6)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
+    self.assertAlmostEqual(self.helper.v_cruise_kph, toyota_canonical_from_dial(30.), delta=0.1)
+
+  def long_press(self, button, frames=TOYOTA_VIRTUAL_CRUISE_LONG_PRESS + 20):
+    self.step(events=[(button, True)])
+    self.step(n=frames)
+    self.step(events=[(button, False)])
+
+  def test_long_press_minus_lowers_by_10(self):
+    self.engage_with_set()  # dial 86
+    self.long_press(ButtonType.decelCruise)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 80.)  # 86 -> onto the grid (90) - 10
+    self.long_press(ButtonType.decelCruise)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 80. - LONG_PRESS_DOWN)
+    for _ in range(10):
+      self.long_press(ButtonType.decelCruise)
+    self.assertEqual(self.helper.v_cruise_kph, 0.)
+
+  def test_res_from_zero_at_standstill_returns_to_the_ceiling(self):
+    self.engage_with_set()
+    for _ in range(25):
+      self.tap(ButtonType.decelCruise, hold_frames=3)
+    self.assertEqual(self.helper.v_cruise_kph, 0.)
+    self.v_ego_kph, self.standstill = 0., True
+    self.tap(ButtonType.accelCruise)
+    self.assertEqual(self.helper.v_cruise_kph, round(pcm_ceiling_base_kph(self.cs(), True), 1))
+    self.assertGreater(self.helper.v_cruise_cluster_kph, 80.)
+
+  def test_cancel_at_zero_then_res_returns_to_the_ceiling(self):
+    self.engage_with_set()
+    for _ in range(25):
+      self.tap(ButtonType.decelCruise, hold_frames=3)
+    self.engaged = False
+    self.step(enabled=False, n=20)
+    self.assertEqual(self.helper.v_cruise_kph, 0.)
+    self.step(enabled=False, events=[(ButtonType.accelCruise, True)])
+    self.engaged = True
+    self.step(enabled=False, events=[(ButtonType.accelCruise, False)])
+    self.step(enabled=False, n=5)
+    self.step(enabled=True, n=5)
+    self.assertEqual(self.helper.v_cruise_kph, round(pcm_ceiling_base_kph(self.cs(), True), 1))
 
   def test_long_press_leaves_the_target_alone(self):
     self.engage_with_set()
