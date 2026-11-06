@@ -50,3 +50,14 @@ def test_onset_cap_starts_soft_and_never_below_the_need():
   e2.adjust(obstacles(l0, l1), l0, l1, v, T, STD)
   need = v0 ** 2 / (2 * (35.0 - ext.CAP_STOP_D - v0 * ext.CAP_REACT_T))
   assert e2.min_accel(-3.5)[0] <= -need + 1e-6  # a close stopped lead: the cap never sits below the need
+
+
+def test_lead_decel_trust():
+  from dragonpilot.selfdrive.controls.lib.long_mpc_ext import lead_decel_trust
+  kph = 1 / 3.6
+  assert abs(lead_decel_trust(-1.4, 32 * kph) - -0.7) < 1e-9          # 21:59:07: half the lead's decel at 20-40 km/h
+  assert lead_decel_trust(-1.4, 10 * kph) == -1.4                     # low speed untouched
+  assert lead_decel_trust(-1.4, 60 * kph) == -1.4                     # highway untouched
+  assert lead_decel_trust(-3.2, 32 * kph) == -3.2                     # a hard brake is never discounted
+  assert -3.0 < lead_decel_trust(-2.5, 32 * kph) < -2.5 * 0.5         # fades back in between
+  assert lead_decel_trust(0.8, 32 * kph) == 0.8                       # acceleration untouched

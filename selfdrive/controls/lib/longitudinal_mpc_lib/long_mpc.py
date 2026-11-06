@@ -5,7 +5,7 @@ import numpy as np
 from cereal import log
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.realtime import DT_MDL
-from dragonpilot.selfdrive.controls.lib.long_mpc_ext import LongMpcExt
+from dragonpilot.selfdrive.controls.lib.long_mpc_ext import LongMpcExt, lead_decel_trust
 from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
 from openpilot.selfdrive.modeld.constants import index_function
@@ -329,6 +329,7 @@ class LongitudinalMpc:
     x_lead = np.clip(x_lead, min_x_lead, 1e8)
     v_lead = np.clip(v_lead, 0.0, 1e8)
     a_lead = np.clip(a_lead, -10., 5.)
+    a_lead = lead_decel_trust(a_lead, v_ego) if lead is not None and lead.status else a_lead  # dragonpilot hook, see long_mpc_ext.py
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 

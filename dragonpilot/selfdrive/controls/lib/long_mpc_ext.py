@@ -25,7 +25,15 @@ obstacle distance and its per-node brake limit), so the MPC plans the shape itse
 Not ported: the static distance trim table (-1 m at 5 km/h would move every stop 1 m closer; dpcr's stop end is tuned
 to 3-3.5 m without it), the highway relaxed / standard gaps and the night gap (highway, not this request), the relaxed
 jerk factor (the Cross runs aggressive).
-Hooks: two lines in LongitudinalMpc.update (the x_obstacles stack and params[:, 0]).
+6. Later brake behind a mid-speed lead that slows (dpcr, owner 2026-11-06, route 000000ec 21:59:07, bookmark: following a
+   lead at ~32 km/h that slowed for a red light, the brake started at 19.8 m - "can it start about 1 m closer?"). The
+   start is set by the lead's predicted decel (aLeadK), not by the gap: the light-onset margin and the aggressive +1 m
+   barely moved it in a closed-loop replay. The lead's decel is trusted LEAD_TRUST_W (x0.5) at 20-40 km/h of ego speed,
+   fading back to full by 15 and 50 km/h, and fully again while the lead brakes hard (LEAD_TRUST_A0 -> A1). Closed-loop
+   replay of 21:59:07 (aggressive): plan at -0.3 / -0.6 / -1.0 reached at 20.3 / 19.8 / 17.9 m -> 19.7 / 19.2 / 15.8 m,
+   peak -1.52 -> -1.89, closest gap 14.1 -> 12.3 m (owner chose "1 m later" knowing the firmer, closer follow).
+
+Hooks: three lines in LongitudinalMpc (process_lead: the lead decel; update: the x_obstacles stack and params[:, 0]).
 """
 import numpy as np
 from cereal import log
@@ -74,6 +82,20 @@ ACCEL_MIN_MPC = -3.5    # m/s^2: stock limit when no cap applies
 
 AGG_GAP_BP = [20.0 / 3.6, 30.0 / 3.6, 60.0 / 3.6, 70.0 / 3.6]  # m/s
 AGG_GAP_V = [0.0, 1.0, 1.0, 0.0]                              # m added (aggressive)
+
+LEAD_TRUST_V_BP = [15.0 / 3.6, 20.0 / 3.6, 40.0 / 3.6, 50.0 / 3.6]  # m/s ego speed
+LEAD_TRUST_W = [1.0, 0.5, 0.5, 1.0]                                 # share of the lead's decel the MPC predicts with
+LEAD_TRUST_A0 = -2.0     # m/s^2 lead decel: the discount fades out from here
+LEAD_TRUST_A1 = -3.0     # m/s^2: full trust from here (a hard brake is never discounted)
+
+
+def lead_decel_trust(a_lead: float, v_ego: float) -> float:
+  """the lead's decel as the MPC predicts with it (6.): x LEAD_TRUST_W at 20-40 km/h, full for a hard brake"""
+  if a_lead >= 0.0:
+    return a_lead
+  w = float(np.interp(v_ego, LEAD_TRUST_V_BP, LEAD_TRUST_W))
+  hard = float(np.interp(a_lead, [LEAD_TRUST_A1, LEAD_TRUST_A0], [1.0, 0.0]))
+  return a_lead * (w + (1.0 - w) * hard)
 
 
 def get_light_onset_margin(v):
