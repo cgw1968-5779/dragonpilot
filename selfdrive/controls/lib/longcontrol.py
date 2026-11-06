@@ -1,8 +1,8 @@
 # dragonpilot (dpcr, owner 2026-11-06: "copy tncr1's mid/low-speed longitudinal control exactly"): this file is tncr1's
 # LongControl (sunnypilot newer-openpilot version: no starting state, kp 0, stopping winds toward stopAccel at
 # 1.0 m/s^3) with only the cereal import and the optional CP_SP adapted. dp's own layers that lived here (soft stop end,
-# stop end level, 1 -> 0 km/h hold, engage brake onset + hold, cut-in onset, engage gas onset) are removed; tncr1's
-# stopping controller and send shaping (dragonpilot/selfdrive/controls/lib/tncr1_long) and its Toyota send side
+# stop end level, 1 -> 0 km/h hold, engage brake onset + hold, cut-in onset) are removed (the engage gas onset came
+# back 11-06 as dragonpilot/.../engage_gas_onset.py, one hook below); tncr1's stopping controller and send shaping (dragonpilot/selfdrive/controls/lib/tncr1_long) and its Toyota send side
 # (opendbc toyota carcontroller hooks) replace them.
 import numpy as np
 from cereal import car
@@ -10,6 +10,7 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.common.pid import PIDController
 from openpilot.selfdrive.modeld.constants import ModelConstants
+from dragonpilot.selfdrive.controls.lib.engage_gas_onset import EngageGasOnset
 
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
@@ -53,6 +54,7 @@ class LongControl:
     self.pid = PIDController(0.0, (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
+    self.engage_gas_onset = EngageGasOnset()  # dragonpilot hook
 
   def reset(self):
     self.pid.reset()
@@ -82,5 +84,7 @@ class LongControl:
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target)
 
+    output_accel = self.engage_gas_onset.update(output_accel, CS, self.long_control_state == LongCtrlState.off,
+                                                self.long_control_state == LongCtrlState.pid)  # dragonpilot hook
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
