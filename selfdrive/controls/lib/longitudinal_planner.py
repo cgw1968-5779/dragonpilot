@@ -19,6 +19,7 @@ from dragonpilot.selfdrive.controls.lib.aem import AEM
 from dragonpilot.selfdrive.controls.lib.apm import APM
 from dragonpilot.selfdrive.controls.lib.eco_ev import EcoEv
 from dragonpilot.selfdrive.controls.lib.cruise_decel import CruiseDecel
+from dragonpilot.selfdrive.controls.lib.stop_approach import StopApproach
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -79,6 +80,7 @@ class LongitudinalPlanner:
     self.apm = APM()
     self.eco_ev = EcoEv(dt)  # dragonpilot hook
     self.cruise_decel = CruiseDecel()  # dragonpilot hook
+    self.stop_approach = StopApproach(self.dt)  # dragonpilot hook
 
   @staticmethod
   def parse_model(model_msg):
@@ -192,6 +194,7 @@ class LongitudinalPlanner:
     else:
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
+    output_a_target = self.stop_approach.update(v_ego, sm['radarState'].leadOne, output_a_target, reset_state)  # dragonpilot hook
     # dragonpilot hook (dpcr 2026-11-06, tncr1 copy): tncr1's should_stop - the car's own speed below 0.3 m/s and the target
     # below 0.1 (drive_helpers.should_stop), not the plan's first speed below vEgoStopping (0.25); e2e's own flag kept
     self.output_should_stop = bool(v_ego < 0.3 and output_a_target < 0.1) or (mode == 'blended' and output_should_stop_e2e)
