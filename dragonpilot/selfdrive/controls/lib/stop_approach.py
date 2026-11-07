@@ -18,6 +18,14 @@ This is the planner's stop target (not a layer after it): while the lead is stop
 Anything else - a moving lead, no lead, an urgent need (>= URGENT_NEED) where the MPC brakes harder, standstill,
 disengaged - hands back to the MPC target at <= J_HANDBACK.
 
+A lead that slows to a stop while we already brake for it (owner 2026-11-07, route 000000f0 23:13:04 / 23:14:05:
+"the halved brake start needs a little more around 15 km/h, mid toward the end, so it does not stop too close"): the
+lead dropped under LEAD_STOPPED_V at 15 km/h / 14 m while the plan was at -1.2; WAIT eased it to -0.30 at J_EASE and
+BRAKE never started (need ~0.8), the car ended 2.9 / 2.3 m back. When the stopped lead was tracked MOVING the frame
+before and the target is already firmer than WAIT_ACCEL, the approach goes straight to BRAKE (-K_NEED x need, eased at
+J_EASE), so it keeps the decel that stops at the gap and ends through the normal RELEASE. A lead first seen already
+stopped (the far approach) is unchanged.
+
 Experimental mode only (owner 2026-11-07: "tuning experimental mode must not touch the non-experimental longitudinal";
 with experimental mode off every output is exactly as before, see test_exp_off_is_unchanged):
   - the start looks T_PRE_EXP (1.0 s) ahead, not T_PRE: 11-06 21:55 a stopped lead seen at 94 m, the brake started at
@@ -65,6 +73,7 @@ class StopApproach:
     self.phase = None  # None (MPC), 'wait', 'brake', 'release', 'handback'
     self.a = 0.0
     self.wait_a = WAIT_ACCEL  # experimental WAIT lift (follows the car's real decel)
+    self.lead_moving = False  # the lead was tracked moving the frame before
 
   def _step(self, target, up, down):
     """move self.a toward target: up = easing rate (toward 0/positive), down = firming rate"""
@@ -74,6 +83,8 @@ class StopApproach:
   def update(self, v_ego, lead, a_mpc, off, exp=False, a_ego=None):
     stopped_lead = (not off and lead is not None and bool(lead.status) and lead.vLead < LEAD_STOPPED_V
                     and 0.0 < lead.dRel < MAX_DIST and v_ego > 0.3)
+    was_moving = self.lead_moving
+    self.lead_moving = not off and lead is not None and bool(lead.status) and lead.vLead >= LEAD_STOPPED_V
     if not stopped_lead:
       self.wait_a = WAIT_ACCEL
       if self.phase in (None, 'handback') and (self.phase is None or abs(self.a - a_mpc) < 0.05):
@@ -86,7 +97,7 @@ class StopApproach:
     need = _need(v_ego, lead.dRel)
     if self.phase in (None, 'handback'):
       self.a = a_mpc if self.phase is None else self.a
-      self.phase = 'wait'
+      self.phase = 'brake' if was_moving and self.a < WAIT_ACCEL else 'wait'
     need_pre = _need(v_ego, lead.dRel - v_ego * (T_PRE_EXP if exp else T_PRE))
     if self.phase == 'wait' and need_pre >= START_NEED:
       self.phase = 'brake'

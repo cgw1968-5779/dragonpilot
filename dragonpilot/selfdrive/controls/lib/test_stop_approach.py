@@ -168,3 +168,24 @@ def test_exp_wait_follows_the_real_decel():
   for _ in range(20):
     a = sa.update(8.3 / 3.6, lead(12.7), -0.3, False, True, -0.1)
   assert abs(a - SA.WAIT_ACCEL) < 1e-9
+
+
+def test_lead_that_stops_while_braking_keeps_the_brake():
+  # 11-07 000000f0 23:13:04: 15 km/h, the lead (moving) drops under LEAD_STOPPED_V 14.2 m ahead, plan -1.07:
+  # no lift to WAIT_ACCEL, BRAKE on the need straight away, smooth ease to the end
+  sa = StopApproach(DT)
+  sa.update(15 / 3.6, lead(14.2, v=3.0), -1.07, False)
+  a = sa.update(15 / 3.6, lead(14.2), -1.07, False)
+  assert sa.phase == 'brake' and a < -0.9
+  v, x, out = 15 / 3.6, 0.0, []
+  for _ in range(200):
+    a = sa.update(v, lead(14.2 - x), -0.8, False)
+    out.append(a); v = max(0.0, v + a * DT); x += v * DT
+    if v <= 0.3:
+      break
+  assert max(out[:20]) < -0.8                                      # held near the need at 15 -> 11 km/h (was -0.30)
+  assert np.max(np.diff(out)) <= SA.J_RELEASE * DT + 1e-9          # eases, no jump
+  # a lead first seen already stopped is unchanged: WAIT
+  sa = StopApproach(DT)
+  sa.update(15 / 3.6, lead(14.2), -1.07, False)
+  assert sa.phase == 'wait'
