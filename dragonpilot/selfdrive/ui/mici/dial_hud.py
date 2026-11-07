@@ -10,8 +10,7 @@ While openpilot owns the Toyota set speed (opendbc toyota/software_set_speed.py)
   reads 0 at a standstill; a HYST hysteresis keeps the number from flickering between two integers;
 - below it, where stock writes MAX: the SET speed (already on the speedometer's scale, vCruiseCluster), 54 px, green
   (owner 2026-10-25 / 10-27);
-- right of that, "PCM" over the PCM's own set speed (the ceiling the driver parks with a long press), as the cluster
-  shows it;
+- (the PCM's own set speed right of it was removed 2026-11-07, owner: "I don't need to see the PCM number on the C4")
 - the box stays up for the whole engagement instead of fading out 2.5 s after the last change.
 Other cars (no software set speed) keep the stock box.
 """
@@ -30,12 +29,9 @@ OFFSET_FULL_KPH = 30.0  # km/h (vEgo) from which the full dial offset applies
 HYST = 0.6  # display units
 SPEED_LABEL_SIZE = 54  # px, the set speed under the current speed
 SPEED_LABEL_RGB = (0, 230, 90)  # green
-PCM_SIZE = 30  # px
-PCM_GAP = 12  # px between the set speed and the PCM ceiling
 LARGE_LABEL_RAISE = 12  # px
 LARGE_LABEL_FREE = 60  # px: labels up to this size fit above the wheel icon unraised
 BOX_MARGIN = 10  # px kept free right of the box for a lane change banner (lane_change_hud.py)
-BASELINE_RATIO = 0.78  # baseline height / font size, aligns the smaller PCM text with the label
 
 
 def dial_kph(v_ego_kph: float) -> float:
@@ -47,7 +43,6 @@ class DialHud:
   def __init__(self):
     self.active = False
     self.shown = 0
-    self.pcm_ceiling = 0.0  # kph
 
   def update(self, car_state) -> None:
     CP = ui_state.CP
@@ -61,9 +56,6 @@ class DialHud:
       value *= KM_TO_MILE
     if abs(value - self.shown) >= HYST or value < 0.5:
       self.shown = int(round(value))
-    cruise = car_state.cruiseState
-    v = cruise.speedCluster if cruise.speedCluster > 0 else cruise.speed
-    self.pcm_ceiling = v * CV.MS_TO_KPH if v > 0 else 0.0
 
   def draw(self, hud, rect: rl.Rectangle) -> None:
     """replaces HudRenderer._draw_set_speed (same position, fonts and drop shadow)"""
@@ -86,21 +78,10 @@ class DialHud:
     rl.draw_text_ex(hud._font_semi_bold, label, rl.Vector2(x + 25, label_y), SPEED_LABEL_SIZE, 0,
                     rl.Color(*SPEED_LABEL_RGB, int(255 * 0.9 * alpha)))
 
-    if self.pcm_ceiling > 0:
-      ceiling = self.pcm_ceiling if ui_state.is_metric else self.pcm_ceiling * KM_TO_MILE
-      color = rl.Color(255, 255, 255, int(255 * 0.7 * alpha))
-      pcm_x = x + 25 + measure_text_cached(hud._font_semi_bold, label, SPEED_LABEL_SIZE).x + PCM_GAP
-      number_y = label_y + (SPEED_LABEL_SIZE - PCM_SIZE) * BASELINE_RATIO
-      for text, pos_y in (("PCM", number_y - PCM_SIZE), (str(round(ceiling)), number_y)):
-        rl.draw_text_ex(hud._font_medium, text, rl.Vector2(pcm_x, pos_y), PCM_SIZE, 0, color)
-
     lane_change_hud.set_room(self.box_width(hud, label))
 
   def box_width(self, hud, label: str) -> float:
     """width of the box as drawn above (same x offsets and fonts) plus BOX_MARGIN"""
     w = 17 + measure_text_cached(hud._font_display, str(self.shown), 112).x
     label_w = 25 + measure_text_cached(hud._font_semi_bold, label, SPEED_LABEL_SIZE).x
-    if self.pcm_ceiling > 0:
-      ceiling = self.pcm_ceiling if ui_state.is_metric else self.pcm_ceiling * KM_TO_MILE
-      label_w += PCM_GAP + max(measure_text_cached(hud._font_medium, t, PCM_SIZE).x for t in ("PCM", str(round(ceiling))))
     return max(w, label_w) + BOX_MARGIN

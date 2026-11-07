@@ -29,7 +29,7 @@ def test_dial_hud_numbers(monkeypatch):
   assert hud.active and hud.shown == 80          # the dial reads 80 at canonical 72.4 (set speed 80 drives 72.4)
   hud.update(car(72.6))
   assert hud.shown == 80                         # hysteresis: no flicker
-  assert abs(hud.pcm_ceiling - 120.0) < 1e-6
+  assert not hasattr(hud, 'pcm_ceiling')         # owner 2026-11-07: no PCM number on the C4
   hud.update(car(0.0))
   assert hud.shown == 0
   CP.carFingerprint = CAR.TOYOTA_RAV4_TSS2      # not the Cross: stock box
