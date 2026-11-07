@@ -27,6 +27,14 @@ NEED_ON = 2.5           # m/s^2, a moving lead
 NEED_ON_STOPPED = 3.0   # m/s^2, a stopped lead
 NEED_OFF = 1.5          # m/s^2
 LEAD_MOVING_V = 3.0     # m/s
+# the speed + gap regime of f8 00:39 (owner 2026-11-08: "record that distance and speed - in that state no soft onset,
+# emergency braking"): from REGIME_V with a time gap <= REGIME_HW a lead braking at REGIME_A or harder switches on at
+# once, before the need above catches up (aLeadK lags the real decel). f8: 58 km/h, 28.2 m (1.75 s), aLeadK -1.75 at
+# -2.75 s (need ON was -2.47 s). Scan of ~13 min following >= 40 km/h (11-03..11-08): only f8 00:39 and f0 23:17
+# (53 km/h, 26.8 m, lead -2.1) switch on.
+REGIME_V = 50.0 / 3.6   # m/s
+REGIME_HW = 2.0         # s
+REGIME_A = -1.75        # m/s^2
 J_HANDBACK = 2.0        # m/s^3
 
 
@@ -57,8 +65,10 @@ class UrgentBrake:
     if off:
       self.active = self.handback = False
       return a_plan
+    regime = (not off and lead is not None and lead.status and moving and v_ego >= REGIME_V and
+              lead.dRel <= REGIME_HW * v_ego and lead.aLeadK <= REGIME_A)
     if not self.active:
-      if v_ego >= V_ON and need >= (NEED_ON if moving else NEED_ON_STOPPED):
+      if regime or (v_ego >= V_ON and need >= (NEED_ON if moving else NEED_ON_STOPPED)):
         self.active, self.handback = True, False
     elif need < NEED_OFF or v_ego < V_OFF:
       self.active, self.handback = False, True

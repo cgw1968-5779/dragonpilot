@@ -19,8 +19,8 @@ def test_f8_0039_switches_to_full_brake_at_once():
 
 def test_normal_following_and_a_firm_lead_brake_do_not_switch():
   ub = U.UrgentBrake(DT)
-  # 58 km/h, 29.5 m, lead braking -2.0 from the same speed: need ~1.7
-  assert ub.update(58 * KPH, lead(29.5, 58, -2.0), -1.2, False) == -1.2
+  # 58 km/h, 2.5 s gap (40.3 m), lead braking -2.0 from the same speed: need ~1.3 (at 1.8 s this is the f8 regime)
+  assert ub.update(58 * KPH, lead(40.3, 58, -2.0), -1.2, False) == -1.2
   # steady following / lead faster
   assert ub.update(58 * KPH, lead(29.5, 58, 0.0), 0.1, False) == 0.1
   # below 40 km/h never
@@ -45,3 +45,13 @@ def test_off_and_smooth_handback():
   assert out == -1.0
   ub.update(57.6 * KPH, lead(27.4, 45.6, -2.54), -2.07, False)
   assert ub.update(57.6 * KPH, lead(27.4, 45.6, -2.54), 0.3, True) == 0.3   # disengaged: untouched
+
+
+def test_f8_regime_switches_earlier():
+  # f8 00:39:02.25: 58 km/h, 28.2 m (1.75 s), lead 51 km/h, aLeadK -1.75 -> on (need alone ~2.0 not yet)
+  ub = U.UrgentBrake(DT)
+  assert ub.update(58.4 * KPH, lead(28.2, 51, -1.75), -0.5, False) == U.ACCEL_MIN
+  # same lead decel with a 2.5 s gap, or at 45 km/h: not the regime
+  for v, d in ((58.4, 40.6), (45.0, 20.0)):
+    ub = U.UrgentBrake(DT)
+    assert ub.update(v * KPH, lead(d, v - 7, -1.75), -0.5, False) == -0.5
