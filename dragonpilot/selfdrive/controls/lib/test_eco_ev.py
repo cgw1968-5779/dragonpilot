@@ -47,38 +47,34 @@ def test_glide_lift_in_eco_cruise():
     assert min(e.max_accel(sm(**kw), off, 2.0) for _ in range(int(25 / 0.05))) > 0.0
 
 
-def test_ev_launch_is_lighter_and_stays_under_7kw():
-  # owner 2026-11-07: lighter eco launch on the battery; the car delivers ~x1.25 the plan below ~12 km/h
-  m, kw = 1500.0, 1000.0
-  for v_kph in (0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0):
+def test_ev_launch_follows_the_owners_manual_ev_launch():
+  # owner 2026-11-08, route f8 00:28 (manual EV launch, delivered): 0-5 1.39, 5-10 1.16, 10-15 0.91, 15-20 0.73,
+  # 20-25 0.63, 25-30 0.51, 30-35 0.44; the car gives ~x1.25 the plan below ~10 km/h, 1.0 from 18 km/h
+  for v_kph, delivered in ((2.5, 1.39), (7.5, 1.16), (12.5, 0.91), (17.5, 0.73), (22.5, 0.63), (27.5, 0.51), (32.5, 0.44)):
     v = v_kph / 3.6
-    e = E.EcoEv(0.05)
-    a = e.max_accel(sm(engine_off=True, v=v, lead=True), False, 2.0)
-    assert a <= drive_mode_max_accel(v, 0, 2.0) - 0.2           # lighter than the eco line
+    a = E.EcoEv(0.05).max_accel(sm(engine_off=True, v=v), False, 2.0)
     gain = float(np.interp(v, [10 / 3.6, 18 / 3.6], [1.25, 1.0]))
-    road = m * 9.81 * 0.010 * v + 0.5 * 1.2 * 0.82 * v ** 3
-    assert (m * a * gain * v + road) / kw <= 7.05, v_kph          # under the ~7.8 kW lowest engine start seen
-  assert abs(E.EcoEv(0.05).max_accel(sm(engine_off=True, v=0.0), False, 2.0) - 1.20) < 1e-9
+    assert abs(a * gain - delivered) < 0.12, (v_kph, a * gain)
+    assert a < drive_mode_max_accel(v, 0, 2.0)                    # lighter than the eco line
 
 
 def test_ev_launch_gives_way_on_low_battery():
   v = 10 / 3.6
   e = E.EcoEv(0.05)
   assert e.max_accel(sm(engine_off=True, v=v, soc=30.0), False, 2.0) == drive_mode_max_accel(v, 0, 2.0)
-  assert abs(e.max_accel(sm(engine_off=True, v=v, soc=-1.0), False, 2.0) - 1.20) < 1e-9   # unknown SOC: EV kept
+  assert abs(e.max_accel(sm(engine_off=True, v=v, soc=-1.0), False, 2.0) - 0.80) < 1e-9   # unknown SOC: EV kept
 
 
-def test_keep_up_with_a_lead_pulling_away_from_20_kmh():
-  def cap(v_kph, v_lead_kph):
+def test_keep_up_with_a_lead_pulling_away_quickly_from_20_kmh():
+  def run(v_kph, v_lead_kph, n=100):
     e = E.EcoEv(0.05)
-    return e.max_accel(sm(engine_off=True, v=v_kph / 3.6, lead=True, v_lead=v_lead_kph / 3.6), False, 2.0)
-  ev15, ev25, ev30 = cap(15, 15), cap(25, 25), cap(30, 30)
-  assert cap(15, 30) == ev15                                          # below 20 km/h: always EV
-  assert ev25 < cap(25, 35) < drive_mode_max_accel(25 / 3.6, 0, 2.0)  # 20-30: blending toward the eco line
-  assert cap(30, 45) == drive_mode_max_accel(30 / 3.6, 0, 2.0) > ev30   # 30 and up: keep up
-  assert cap(60, 75) == drive_mode_max_accel(60 / 3.6, 0, 2.0)
-  # hysteresis: once pulling away, a lead only 0.3 m/s faster keeps it
-  e = E.EcoEv(0.05)
-  e.max_accel(sm(engine_off=True, v=30 / 3.6, lead=True, v_lead=35 / 3.6), False, 2.0)
-  assert e.max_accel(sm(engine_off=True, v=30 / 3.6, lead=True, v_lead=30 / 3.6 + 0.3), False, 2.0) == \
-    drive_mode_max_accel(30 / 3.6, 0, 2.0)
+    outs = [e.max_accel(sm(engine_off=True, v=v_kph / 3.6, lead=True, v_lead=v_lead_kph / 3.6), False, 2.0) for _ in range(n)]
+    return outs
+  ev = lambda kph: run(kph, kph)[-1]
+  assert run(15, 30)[-1] == ev(15)                                   # below 20 km/h: always EV
+  assert run(30, 32)[-1] == ev(30)                                   # a lead only 2 km/h faster: still EV
+  outs = run(30, 45)
+  assert abs(outs[-1] - drive_mode_max_accel(30 / 3.6, 0, 2.0)) < 1e-9   # pulling away quickly at 30: the eco line
+  assert max(abs(b - a) for a, b in zip(outs, outs[1:])) <= E.KEEP_UP_RATE * 0.05 * \
+    (drive_mode_max_accel(30 / 3.6, 0, 2.0) - ev(30)) + 1e-9         # built smoothly
+  assert ev(25) < run(25, 40)[-1] < drive_mode_max_accel(25 / 3.6, 0, 2.0)  # 20-30: part way

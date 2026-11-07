@@ -19,9 +19,11 @@ the MPC, the stopping logic and NORMAL / SPORT are untouched.
    and the engine started in 32 of 33 engine-off launches at 10-16 km/h, ~10-11 kW (lowest 7.8 kW). Line 1 now holds
    the launch to ~7 kW of wheel power: delivered <= 1.5 m/s^2 to 10 km/h, then (7 kW - road load) / (m v):
    plan 1.20 / 0.93 / 0.73 / 0.56 / 0.44 / 0.35 at 0-10 / 15 / 20 / 25 / 30 / 35 km/h (0 -> 20 km/h ~4.6 s, was ~3.4).
+   11-08: replaced by the owner's own EV launch (route f8 00:28, see ECO_ENGINE_OFF_BP).
    It gives way to the normal eco line
      - when the battery is low: SOC 37 -> 33 % (as ev_glide: >= 35; unknown SOC: kept);
-     - while a lead pulls away (vLead > vEgo + 0.5, released below vEgo - 0.5) between 20 and 30 km/h and above.
+     - while a lead pulls away quickly (vLead > vEgo + 1.0 m/s, released at vEgo; 11-08, was +-0.5) between 20 and 30
+       km/h and above; the weight moves at KEEP_UP_RATE so the catch-up builds smoothly.
    The engine-running eco line, normal and sport are untouched.
 """
 import math
@@ -33,11 +35,17 @@ from dragonpilot.selfdrive.controls.lib.drive_mode import drive_mode_max_accel
 from dragonpilot.selfdrive.controls.lib.ev_glide import EvGlide
 
 ECO = 0  # carState.driveMode
-ECO_ENGINE_OFF_BP = [0., 10 / 3.6, 15 / 3.6, 20 / 3.6, 25 / 3.6, 30 / 3.6, 35 / 3.6, 16.67, 19.44, 22.22, 24., 36.]  # m/s
-ECO_ENGINE_OFF_MAX_ACCEL = [1.20, 1.20, 0.93, 0.73, 0.56, 0.44, 0.35, 0.25, 0.16, 0.12, 0.08, 0.06]
+# Launch part (0-35 km/h) = the owner's own EV launch (owner 2026-11-08: "00:28 I launched by hand with EV force -
+# work out what it should be and put it in as the eco launch with no lead"). Route 000000f8 00:28:11 (eco, SOC 44 %,
+# gas pedal, engine off until 34 km/h at ~8.4 kW), delivered aEgo median per band: 0-5 km/h 1.39, 5-10 1.16, 10-15 0.91,
+# 15-20 0.73, 20-25 0.63, 25-30 0.51, 30-35 0.44. The plan here is that / the car's gain (x1.25 the plan below ~10
+# km/h, 1.0 from 18 km/h; 35 engaged launches 11-06/11-07): 1.12 / 1.00 / 0.80 / 0.76 / 0.68 / 0.56 / 0.47 / 0.40.
+ECO_ENGINE_OFF_BP = [0., 5 / 3.6, 10 / 3.6, 15 / 3.6, 20 / 3.6, 25 / 3.6, 30 / 3.6, 35 / 3.6, 16.67, 19.44, 22.22, 24., 36.]  # m/s
+ECO_ENGINE_OFF_MAX_ACCEL = [1.12, 1.00, 0.80, 0.76, 0.68, 0.56, 0.47, 0.40, 0.25, 0.16, 0.12, 0.08, 0.06]
 EV_SOC_BP = [33., 37.]                      # % hybrid battery: low (ev_glide also needs >= 35) -> the normal eco line
 KEEP_UP_V_BP = [20 / 3.6, 30 / 3.6]         # m/s: a lead pulling away takes the normal eco line from 20 -> 30 km/h
-KEEP_UP_ON, KEEP_UP_OFF = 0.5, -0.5         # m/s: vLead - vEgo hysteresis for "the lead pulls away"
+KEEP_UP_ON, KEEP_UP_OFF = 1.0, 0.0          # m/s: vLead - vEgo hysteresis for "the lead pulls away quickly" (11-08: was 0.5 / -0.5)
+KEEP_UP_RATE = 0.5                          # 1/s: the keep-up weight moves at most this fast (smooth catch-up, 2 s)
 
 
 class _Lead:
@@ -48,9 +56,11 @@ class _Lead:
 
 class EcoEv:
   def __init__(self, dt: float):
+    self.dt = dt
     self.ev_glide = EvGlide(dt)
     self.glide_cap: float | None = None
     self.keep_up = False
+    self.keep_w = 0.0  # smoothed keep-up weight
 
   def max_accel(self, sm, long_control_off: bool, stock_max_accel: float) -> float:
     cs, cc = sm['carState'], sm['carControl']
@@ -62,8 +72,9 @@ class EcoEv:
     if eco and cs.engineOff:
       a_ev = float(np.interp(max(0.0, cs.vEgo), ECO_ENGINE_OFF_BP, ECO_ENGINE_OFF_MAX_ACCEL))
       w = float(np.interp(cs.hvSoc, EV_SOC_BP, [0.0, 1.0])) if cs.hvSoc >= 0.0 else 1.0
-      if self.keep_up:
-        w *= float(np.interp(cs.vEgo, KEEP_UP_V_BP, [1.0, 0.0]))
+      k_target = float(np.interp(cs.vEgo, KEEP_UP_V_BP, [0.0, 1.0])) if self.keep_up else 0.0
+      self.keep_w = float(np.clip(k_target, self.keep_w - KEEP_UP_RATE * self.dt, self.keep_w + KEEP_UP_RATE * self.dt))
+      w *= 1.0 - self.keep_w
       a_max = a_max + w * (a_ev - a_max)
     pitch = cc.orientationNED[1] if len(cc.orientationNED) == 3 else math.inf  # unknown pitch: no glide
     self.glide_cap = self.ev_glide.update(eco, not long_control_off, cs.gasPressed or cs.brakePressed, cs.vEgo, cs.aEgo,
