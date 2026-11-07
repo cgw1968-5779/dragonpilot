@@ -19,12 +19,20 @@ Ported from sunnypilot tncr1 (selfdrive/car/cruise.py + sunnypilot cruise_ext.py
 - The increment is fixed at 5 km/h (no params).
 - Set speed down to 0 (owner 2026-11-05, port of tncr1 cadbfd2 2026-10-27, both cars): below 30 the - presses keep
   stepping 25, 20, 15, 10, 5, 0 (the PCM's own number stays at its 30 minimum: it is only the ceiling), and 0 is a stop
-  target (cruise_decel slows to it). A long press of - (held > 1 s) lowers the target by LONG_PRESS_DOWN (10 km/h on
+  target (cruise_decel slows to it). A long press of - (held > 1 s) lowered the target by 10 km/h (on
   the dial, floor 0) instead of leaving it alone. From 0, RES at standstill or a RES resume returns to the PCM ceiling
   (the number on the dash) so the car can move off; while rolling, + from 0 steps 5, 10, ...
 
 VCruiseHelper.update_v_cruise hands the whole update to ToyotaSoftwareSetSpeed.update() (one dragonpilot hook); the
 targets and button timers stay on the helper, so card.py publishes them unchanged.
+- Owner 2026-11-07 (dpcr a5080c12 + cb9fca2c, "dppb too"): from 30 on the dial (or below) one short - press goes
+  straight to 0 (no 25 ... 5 steps); a long press of - (held 1 s) from above 30 goes straight to 30 and stops there
+  (to reach 0: release, then one short -); RES/+ from 0 always goes straight back to the PCM ceiling (the number on
+  the dash), short or long, stopped or rolling. On the Altis this matters even more than on the Cross: the PCM never
+  sets cruiseState.standstill while openpilot holds the car (route 190, 8 stops, 184 s: always 0), so the old
+  "RES at standstill" branch never ran and RES from 0 at a stop stepped 5, 10, ... The Altis PCM steps its own
+  number 5 km/h per press and every 0.25-0.45 s while held (route 190: 65 -> 30 in 1.3 s), so after going down to 0
+  its number (the RES ceiling) is usually near 30.
 """
 import math
 import numpy as np
@@ -40,7 +48,8 @@ V_CRUISE_MAX = 145
 V_CRUISE_UNSET = 255
 IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)
 SHORT_PRESS_INCREMENT = 5
-LONG_PRESS_DOWN = 10  # km/h on the dial, a long press of - (owner 2026-11-05)
+LONG_PRESS_TO = 30.   # km/h on the dial: a long press of - from above goes straight here and stops (owner 2026-11-07)
+ZERO_FROM_DIAL = 30.  # km/h on the dial: a short - press from here or below goes straight to 0 (owner 2026-11-07)
 
 # A physical short press is 450-520 ms on the bus; the PCM itself treats a longer hold as a long press and steps its
 # own set speed. Err on the long side: if the PCM sees a long press and we see a short one both step by 5, the other
@@ -213,6 +222,11 @@ class ToyotaSoftwareSetSpeed:
       if hold <= 0:
         continue  # spurious
       st = h.button_change_states[b.type.raw]
+      if b.type.raw == ButtonType.accelCruise and h.v_cruise_kph == 0:
+        # RES/+ from the stop target, short or long, stopped or rolling: straight back to the PCM ceiling (on release,
+        # so a long press that raised the ceiling counts)
+        self.to_ceiling(h, CS, is_metric)
+        continue
       if hold > TOYOTA_VIRTUAL_CRUISE_LONG_PRESS:
         # a long press of + follows the Altis PCM's own climb (dppb); a long press of - already stepped while held
         if b.type.raw == ButtonType.accelCruise and st["enabled"] and not (st["standstill"] or CS.cruiseState.standstill):
@@ -221,8 +235,6 @@ class ToyotaSoftwareSetSpeed:
         # (the - steps were already applied while held, see repeat_long_minus)
         continue
       if b.type.raw == ButtonType.accelCruise and (st["standstill"] or CS.cruiseState.standstill):
-        if h.v_cruise_kph == 0:
-          self.to_ceiling(h, CS, is_metric)  # RES from the stop target at standstill: move off
         continue  # RES to leave standstill does not change the set speed
       if not st["enabled"]:
         continue
@@ -232,6 +244,8 @@ class ToyotaSoftwareSetSpeed:
         ref_new = CRUISE_NEAREST_FUNC[b.type.raw](ref / delta) * delta
       else:
         ref_new = ref + delta * CRUISE_INTERVAL_SIGN[b.type.raw]
+      if b.type.raw == ButtonType.decelCruise and ref <= ZERO_FROM_DIAL + 0.05:
+        ref_new = 0.  # from 30 or below: straight to the stop target
       delta_kph = ref_new - ref
       # if SET is tapped while overriding, do not lower the target below the current speed
       if CS.gasPressed and delta_kph < 0.:
@@ -248,21 +262,17 @@ class ToyotaSoftwareSetSpeed:
       self.to_ceiling(h, CS, is_metric)
 
   def repeat_long_minus(self, h, CS, is_metric: bool) -> None:
-    """While - is held past a short press, lower the target to the next lower multiple of
-    LONG_PRESS_DOWN at once and by LONG_PRESS_DOWN again every further
-    TOYOTA_VIRTUAL_CRUISE_LONG_PRESS (1 s) it stays held, down to 0 (owner 2026-11-05: holding - must keep going down
-    10 at a time without releasing). The release of such a press is then ignored by short_presses."""
-    hold = h.button_timers[ButtonType.decelCruise]
-    if hold <= TOYOTA_VIRTUAL_CRUISE_LONG_PRESS or (hold - 1) % TOYOTA_VIRTUAL_CRUISE_LONG_PRESS != 0:
+    """Once - has been held past a short press (1 s), the target goes straight to LONG_PRESS_TO (30 on the dial) and
+    stays there however long - stays held (owner 2026-11-07: "a long press jumps to 30 and stops; to go to 0, release
+    and short-press - once more"). Already at or below 30 (30-40 also lands on 30, as before): nothing. The release of
+    such a press is then ignored by short_presses."""
+    if h.button_timers[ButtonType.decelCruise] != TOYOTA_VIRTUAL_CRUISE_LONG_PRESS + 1:
       return
     if not h.button_change_states[ButtonType.decelCruise]["enabled"]:
       return
-    delta = (1. if is_metric else IMPERIAL_INCREMENT) * SHORT_PRESS_INCREMENT
-    step = delta * LONG_PRESS_DOWN / SHORT_PRESS_INCREMENT
     ref = h.v_cruise_cluster_kph
-    # first down to the next lower multiple of 10 (45 -> 40, 86 -> 80), then 10 at a time: 40, 30, 20, 10, 0
-    # (owner 2026-11-05)
-    self.apply_dial_delta(h, max((math.ceil(round(ref / step, 6)) - 1) * step, 0.) - ref)
+    if ref > LONG_PRESS_TO + 0.05:
+      self.apply_dial_delta(h, LONG_PRESS_TO - ref)
 
   def apply_dial_delta(self, h, delta_kph: float) -> None:
     """Apply a delta in DISPLAY (speedometer) space and keep the canonical target on the dial's calibration line."""

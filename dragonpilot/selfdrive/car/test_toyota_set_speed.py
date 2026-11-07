@@ -7,7 +7,7 @@ from cereal import car
 from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import VCruiseHelper, V_CRUISE_UNSET
 from opendbc.car.toyota.software_set_speed import CruiseStalk, software_set_speed
-from dragonpilot.selfdrive.car.toyota_set_speed import (TOYOTA_PCM_SET_SPEED_HEADROOM_KPH, TOYOTA_VIRTUAL_CRUISE_LONG_PRESS, LONG_PRESS_DOWN,
+from dragonpilot.selfdrive.car.toyota_set_speed import (TOYOTA_PCM_SET_SPEED_HEADROOM_KPH, TOYOTA_VIRTUAL_CRUISE_LONG_PRESS,
                                                         toyota_dial_from_canonical, toyota_canonical_from_dial,
                                                         pcm_ceiling_base_kph)
 
@@ -110,8 +110,8 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(events=[(ButtonType.decelCruise, False)])
     self.assertEqual(self.helper.v_cruise_cluster_kph, 55.)
 
-  def test_presses_reach_the_stop_target_in_5_steps(self):
-    # owner 2026-11-05: below 30 the - presses step 25, 20, 15, 10, 5, 0 (0 = stop target)
+  def test_minus_from_30_goes_straight_to_0(self):
+    # owner 2026-11-07: from 30 on the dial one short - goes straight to 0 (0 = stop target); above 30 still -5
     self.engage_with_set()
     seen = []
     for _ in range(25):
@@ -119,12 +119,10 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
       seen.append(self.helper.v_cruise_cluster_kph)
     self.assertEqual(self.helper.v_cruise_kph, 0.)
     self.assertEqual(self.helper.v_cruise_cluster_kph, 0.)
-    self.assertEqual([x for x in seen if x < 31][:7], [30., 25., 20., 15., 10., 5., 0.])
-    self.v_ego_kph = 10.  # rolling: + from 0 steps 5, 10
+    self.assertEqual([x for x in seen if x < 41][:4], [40., 35., 30., 0.])
+    self.v_ego_kph = 10.  # rolling: RES/+ from 0 goes straight back to the ceiling
     self.tap(ButtonType.accelCruise)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 5.)
-    self.tap(ButtonType.accelCruise)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 10.)
+    self.assertAlmostEqual(self.helper.v_cruise_kph, pcm_ceiling_base_kph(self.cs(), True), delta=0.15)
 
   def test_set_at_pcm_minimum_mirrors_the_dial(self):
     # PCM SET at dial 30 (canonical 25.7): no 30 km/h canonical floor any more, the HUD shows the dash's 30
@@ -138,53 +136,62 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(n=frames)
     self.step(events=[(button, False)])
 
-  def test_long_press_minus_lowers_by_10(self):
-    self.engage_with_set()  # dial 65
-    self.long_press(ButtonType.decelCruise)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 60.)  # 65 -> next lower multiple of 10
-    self.long_press(ButtonType.decelCruise)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 60. - LONG_PRESS_DOWN)
-    for _ in range(10):
-      self.long_press(ButtonType.decelCruise)
-    self.assertEqual(self.helper.v_cruise_kph, 0.)
+  def test_long_press_minus_jumps_to_30_and_stops(self):
+    # owner 2026-11-07: from 40-130 a long - goes straight to 30 and stays there however long it is held
+    for pcm, dial in ((63., 68.), (120., 127.), (36., 40.)):
+      self.setUp()
+      self.pcm_kph, self.pcm_dial_kph = pcm, dial
+      self.engage_with_set()
+      start = self.helper.v_cruise_cluster_kph
+      L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
+      self.step(events=[(ButtonType.decelCruise, True)])
+      self.step(n=L - 5)
+      self.assertEqual(self.helper.v_cruise_cluster_kph, start)  # nothing before 1 s
+      self.step(n=10)
+      self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
+      self.step(n=5 * L)  # still held: stays 30
+      self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
+      self.step(events=[(ButtonType.decelCruise, False)])  # the release adds nothing
+      self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
+      self.tap(ButtonType.decelCruise, hold_frames=3)  # then one short - : 0
+      self.assertEqual(self.helper.v_cruise_kph, 0.)
 
-  def test_holding_minus_keeps_lowering_by_10_every_second(self):
-    # owner 2026-11-05: holding - must keep going down 10 at a time without releasing
-    L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
+  def test_long_press_minus_at_30_or_35(self):
+    # 30-40 unchanged: 35 -> 30; at 30 a long press does nothing (0 only with a short press); at 0 stays 0
     self.engage_with_set()
-    self.step(events=[(ButtonType.decelCruise, True)])
-    self.step(n=L - 5)
-    start = self.helper.v_cruise_cluster_kph  # nothing yet before 1 s
-    self.step(n=10)
-    first = self.helper.v_cruise_cluster_kph
-    self.assertLess(first, start)
-    self.assertEqual(first % 10, 0)
-    self.assertGreater(first, start - 10.01)
-    self.step(n=L)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, first - LONG_PRESS_DOWN)
-    self.step(n=L)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, first - 2 * LONG_PRESS_DOWN)
-    self.step(events=[(ButtonType.decelCruise, False)])  # the release adds nothing
-    self.assertEqual(self.helper.v_cruise_cluster_kph, first - 2 * LONG_PRESS_DOWN)
-    self.step(events=[(ButtonType.decelCruise, True)])
-    self.step(n=20 * L)  # held long enough: down to the stop target and no further
-    self.step(events=[(ButtonType.decelCruise, False)])
-    self.assertEqual(self.helper.v_cruise_kph, 0.)
-
-  def test_long_press_minus_from_45_goes_40_30_20_10_0(self):
-    self.engage_with_set()
-    while self.helper.v_cruise_cluster_kph > 45.:
+    while self.helper.v_cruise_cluster_kph > 35.:
       self.tap(ButtonType.decelCruise, hold_frames=3)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 45.)
-    L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
-    self.step(events=[(ButtonType.decelCruise, True)])
-    seen = []
-    self.step(n=5)
-    for _ in range(6):
-      self.step(n=L)
-      seen.append(self.helper.v_cruise_cluster_kph)
-    self.step(events=[(ButtonType.decelCruise, False)])
-    self.assertEqual(seen, [40., 30., 20., 10., 0., 0.])
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 35.)
+    for expect in (30., 30.):
+      self.long_press(ButtonType.decelCruise)
+      self.assertEqual(self.helper.v_cruise_cluster_kph, expect)
+    self.tap(ButtonType.decelCruise, hold_frames=3)
+    self.long_press(ButtonType.decelCruise)
+    self.assertEqual(self.helper.v_cruise_kph, 0.)
+
+  def test_res_from_zero_stopped_without_standstill_flag_returns_to_the_ceiling(self):
+    # Altis route 190: the PCM never sets cruiseState.standstill while openpilot holds the car -> RES stepped 5, 10
+    self.engage_with_set()
+    for _ in range(25):
+      self.tap(ButtonType.decelCruise, hold_frames=3)
+    self.v_ego_kph, self.standstill = 0., False
+    self.tap(ButtonType.accelCruise)
+    self.assertAlmostEqual(self.helper.v_cruise_kph, pcm_ceiling_base_kph(self.cs(), True), delta=0.15)
+
+  def test_long_res_from_zero_returns_to_the_raised_ceiling(self):
+    for v, standstill in ((0., False), (0., True), (14., False)):
+      self.setUp()
+      self.engage_with_set()
+      for _ in range(25):
+        self.tap(ButtonType.decelCruise, hold_frames=3)
+      self.v_ego_kph, self.standstill = v, standstill
+      self.pcm_kph, self.pcm_dial_kph = 26., 30.  # the Altis PCM is at its 30 minimum after going down
+      self.step(events=[(ButtonType.accelCruise, True)])
+      self.step(n=TOYOTA_VIRTUAL_CRUISE_LONG_PRESS + 50)
+      self.pcm_kph, self.pcm_dial_kph = 41., 45.  # the PCM climbed its own number while held
+      self.step(events=[(ButtonType.accelCruise, False)])
+      self.assertAlmostEqual(self.helper.v_cruise_kph, pcm_ceiling_base_kph(self.cs(), True), delta=0.15, msg=(v, standstill))
+      self.assertGreater(self.helper.v_cruise_cluster_kph, 40.)
 
   def test_res_from_zero_at_standstill_returns_to_the_ceiling(self):
     self.engage_with_set()
