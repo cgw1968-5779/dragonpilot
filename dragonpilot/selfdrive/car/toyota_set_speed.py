@@ -15,6 +15,8 @@ Ported from sunnypilot tncr1 (selfdrive/car/cruise.py + sunnypilot cruise_ext.py
   target (cruise_decel slows to it). A long press of - (held > 1 s) lowers the target by LONG_PRESS_DOWN (10 km/h on
   the dial, floor 0) instead of leaving it alone. From 0, RES at standstill or a RES resume returns to the PCM ceiling
   (the number on the dash) so the car can move off; while rolling, + from 0 steps 5, 10, ...
+- Owner 2026-11-07: from 30 on the dial (or below) one - press, short or long, goes straight to 0 (no 25 ... 5 steps),
+  and RES/+ from 0 always goes straight back to the PCM ceiling (the number on the dash), also while rolling.
 
 VCruiseHelper.update_v_cruise hands the whole update to ToyotaSoftwareSetSpeed.update() (one dragonpilot hook); the
 targets and button timers stay on the helper, so card.py publishes them unchanged.
@@ -34,6 +36,7 @@ V_CRUISE_UNSET = 255
 IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)
 SHORT_PRESS_INCREMENT = 5
 LONG_PRESS_DOWN = 10  # km/h on the dial, a long press of - (owner 2026-11-05)
+ZERO_FROM_DIAL = 30.  # km/h on the dial: a - press from here or below goes straight to 0 (owner 2026-11-07)
 
 # A physical short press is 450-520 ms on the bus; the PCM itself treats a longer hold as a long press and steps its
 # own set speed. Err on the long side: if the PCM sees a long press and we see a short one both step by 5, the other
@@ -205,13 +208,17 @@ class ToyotaSoftwareSetSpeed:
       if hold <= 0:
         continue  # spurious
       st = h.button_change_states[b.type.raw]
+      if b.type.raw == ButtonType.accelCruise and h.v_cruise_kph == 0:
+        # RES/+ from the stop target, short or long, stopped or rolling: straight back to the PCM ceiling (on release,
+        # so a long press that raised the ceiling counts). Road 11-05 21:32 / 11-06 00:01:34: stopped but the PCM's
+        # standstill flag was 0, so RES stepped 5, 10, ...; 11-06 00:03:41 / 00:04:11: a long RES left the target at 0.
+        self.to_ceiling(h, CS, is_metric)
+        continue
       if hold > TOYOTA_VIRTUAL_CRUISE_LONG_PRESS:
         # a long press of + only moves the PCM ceiling; a long press of - already stepped while held
         # (the - steps were already applied while held, see repeat_long_minus)
         continue
       if b.type.raw == ButtonType.accelCruise and (st["standstill"] or CS.cruiseState.standstill):
-        if h.v_cruise_kph == 0:
-          self.to_ceiling(h, CS, is_metric)  # RES from the stop target at standstill: move off
         continue  # RES to leave standstill does not change the set speed
       if not st["enabled"]:
         continue
@@ -221,6 +228,8 @@ class ToyotaSoftwareSetSpeed:
         ref_new = CRUISE_NEAREST_FUNC[b.type.raw](ref / delta) * delta
       else:
         ref_new = ref + delta * CRUISE_INTERVAL_SIGN[b.type.raw]
+      if b.type.raw == ButtonType.decelCruise and ref <= ZERO_FROM_DIAL + 0.05:
+        ref_new = 0.  # from 30 or below: straight to the stop target
       delta_kph = ref_new - ref
       # if SET is tapped while overriding, do not lower the target below the current speed
       if CS.gasPressed and delta_kph < 0.:
@@ -242,7 +251,8 @@ class ToyotaSoftwareSetSpeed:
     ref = h.v_cruise_cluster_kph
     # first down to the next lower multiple of 10 (45 -> 40, 86 -> 80), then 10 at a time: 40, 30, 20, 10, 0
     # (owner 2026-11-05)
-    self.apply_dial_delta(h, max((math.ceil(round(ref / step, 6)) - 1) * step, 0.) - ref)
+    new = 0. if ref <= ZERO_FROM_DIAL + 0.05 else max((math.ceil(round(ref / step, 6)) - 1) * step, 0.)
+    self.apply_dial_delta(h, new - ref)
 
   def apply_dial_delta(self, h, delta_kph: float) -> None:
     """Apply a delta in DISPLAY (speedometer) space and keep the canonical target on the dial's calibration line."""

@@ -109,8 +109,8 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(events=[(ButtonType.decelCruise, False)])
     self.assertEqual(self.helper.v_cruise_cluster_kph, 80.)
 
-  def test_presses_reach_the_stop_target_in_5_steps(self):
-    # owner 2026-11-05: below 30 the - presses step 25, 20, 15, 10, 5, 0 (0 = stop target)
+  def test_minus_from_30_goes_straight_to_0(self):
+    # owner 2026-11-07: from 30 on the dial one - press goes straight to 0 (0 = stop target); above 30 still -5
     self.engage_with_set()
     seen = []
     for _ in range(25):
@@ -118,12 +118,13 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
       seen.append(self.helper.v_cruise_cluster_kph)
     self.assertEqual(self.helper.v_cruise_kph, 0.)
     self.assertEqual(self.helper.v_cruise_cluster_kph, 0.)
-    self.assertEqual([x for x in seen if x < 31][:7], [30., 25., 20., 15., 10., 5., 0.])
-    self.v_ego_kph = 10.  # rolling: + from 0 steps 5, 10
+    self.assertEqual([x for x in seen if x < 41][:4], [40., 35., 30., 0.])
+    self.v_ego_kph = 10.  # rolling: RES/+ from 0 goes straight back to the ceiling
     self.tap(ButtonType.accelCruise)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 5.)
-    self.tap(ButtonType.accelCruise)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 10.)
+    self.assertEqual(self.helper.v_cruise_kph, round(pcm_ceiling_base_kph(self.cs(), True), 1))
+    self.assertGreater(self.helper.v_cruise_cluster_kph, 80.)
+    self.tap(ButtonType.accelCruise)  # from there + is +5 again (capped at the PCM + headroom)
+    self.assertGreaterEqual(self.helper.v_cruise_cluster_kph, 86.)
 
   def test_set_at_pcm_minimum_mirrors_the_dial(self):
     # PCM SET at dial 30 (canonical 25.7): no 30 km/h canonical floor any more, the HUD shows the dash's 30
@@ -170,7 +171,7 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(events=[(ButtonType.decelCruise, False)])
     self.assertEqual(self.helper.v_cruise_kph, 0.)
 
-  def test_long_press_minus_from_45_goes_40_30_20_10_0(self):
+  def test_long_press_minus_from_45_goes_40_30_0(self):
     self.engage_with_set()
     while self.helper.v_cruise_cluster_kph > 45.:
       self.tap(ButtonType.decelCruise, hold_frames=3)
@@ -183,7 +184,7 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
       self.step(n=L)
       seen.append(self.helper.v_cruise_cluster_kph)
     self.step(events=[(ButtonType.decelCruise, False)])
-    self.assertEqual(seen, [40., 30., 20., 10., 0., 0.])
+    self.assertEqual(seen, [40., 30., 0., 0., 0., 0.])  # owner 2026-11-07: from 30 straight to 0
 
   def test_res_from_zero_at_standstill_returns_to_the_ceiling(self):
     self.engage_with_set()
@@ -194,6 +195,31 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.tap(ButtonType.accelCruise)
     self.assertEqual(self.helper.v_cruise_kph, round(pcm_ceiling_base_kph(self.cs(), True), 1))
     self.assertGreater(self.helper.v_cruise_cluster_kph, 80.)
+
+  def test_res_from_zero_stopped_without_standstill_flag_returns_to_the_ceiling(self):
+    # road 11-05 21:32 / 11-06 00:01:34: stopped at 0 km/h but the PCM's standstill flag 0 -> RES stepped 5, 10, ...
+    self.engage_with_set()
+    for _ in range(25):
+      self.tap(ButtonType.decelCruise, hold_frames=3)
+    self.v_ego_kph, self.standstill = 0., False
+    self.tap(ButtonType.accelCruise)
+    self.assertEqual(self.helper.v_cruise_kph, round(pcm_ceiling_base_kph(self.cs(), True), 1))
+
+  def test_long_res_from_zero_returns_to_the_raised_ceiling(self):
+    # road 11-06 00:03:41 (stopped) / 00:04:11 (14 km/h): a long RES only raised the PCM number, the target stayed 0
+    for v, standstill in ((0., False), (0., True), (14., False)):
+      self.setUp()
+      self.engage_with_set()
+      for _ in range(25):
+        self.tap(ButtonType.decelCruise, hold_frames=3)
+      self.v_ego_kph, self.standstill = v, standstill
+      self.step(events=[(ButtonType.accelCruise, True)])
+      self.step(n=TOYOTA_VIRTUAL_CRUISE_LONG_PRESS + 50)
+      self.pcm_kph, self.pcm_dial_kph = 90., 96.  # the PCM raised its own number while held
+      self.step(events=[(ButtonType.accelCruise, False)])
+      # (to 0.15: the dial snaps onto its integer the next frame)
+      self.assertAlmostEqual(self.helper.v_cruise_kph, pcm_ceiling_base_kph(self.cs(), True), delta=0.15, msg=(v, standstill))
+      self.assertGreater(self.helper.v_cruise_cluster_kph, 90.)
 
   def test_cancel_at_zero_then_res_returns_to_the_ceiling(self):
     self.engage_with_set()
