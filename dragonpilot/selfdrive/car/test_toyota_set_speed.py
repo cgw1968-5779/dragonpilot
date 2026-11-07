@@ -7,7 +7,7 @@ from cereal import car
 from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import VCruiseHelper, V_CRUISE_UNSET
 from opendbc.car.toyota.software_set_speed import CruiseStalk, software_set_speed
-from dragonpilot.selfdrive.car.toyota_set_speed import (TOYOTA_PCM_SET_SPEED_HEADROOM_KPH, TOYOTA_VIRTUAL_CRUISE_LONG_PRESS, LONG_PRESS_DOWN,
+from dragonpilot.selfdrive.car.toyota_set_speed import (TOYOTA_PCM_SET_SPEED_HEADROOM_KPH, TOYOTA_VIRTUAL_CRUISE_LONG_PRESS,
                                                         toyota_dial_from_canonical, toyota_canonical_from_dial,
                                                         pcm_ceiling_base_kph)
 
@@ -138,53 +138,37 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(n=frames)
     self.step(events=[(button, False)])
 
-  def test_long_press_minus_lowers_by_10(self):
-    self.engage_with_set()  # dial 86
-    self.long_press(ButtonType.decelCruise)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 80.)  # 86 -> onto the grid (90) - 10
-    self.long_press(ButtonType.decelCruise)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 80. - LONG_PRESS_DOWN)
-    for _ in range(10):
-      self.long_press(ButtonType.decelCruise)
-    self.assertEqual(self.helper.v_cruise_kph, 0.)
+  def test_long_press_minus_jumps_to_30_and_stops(self):
+    # owner 2026-11-07: from 40-130 a long - goes straight to 30 and stays there however long it is held
+    for pcm, dial in ((80., 86.), (120., 128.), (37., 40.)):
+      self.setUp()
+      self.pcm_kph, self.pcm_dial_kph = pcm, dial
+      self.engage_with_set()
+      L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
+      self.step(events=[(ButtonType.decelCruise, True)])
+      self.step(n=L - 5)
+      self.assertEqual(self.helper.v_cruise_cluster_kph, dial)  # nothing before 1 s
+      self.step(n=10)
+      self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
+      self.step(n=5 * L)  # still held: stays 30
+      self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
+      self.step(events=[(ButtonType.decelCruise, False)])  # the release adds nothing
+      self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
+      self.tap(ButtonType.decelCruise, hold_frames=3)  # then one short - : 0
+      self.assertEqual(self.helper.v_cruise_kph, 0.)
 
-  def test_holding_minus_keeps_lowering_by_10_every_second(self):
-    # owner 2026-11-05: holding - must keep going down 10 at a time without releasing
-    L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
+  def test_long_press_minus_at_30_or_35(self):
+    # 30-40 unchanged: 35 -> 30; at 30 a long press does nothing (0 only with a short press); at 0 stays 0
     self.engage_with_set()
-    self.step(events=[(ButtonType.decelCruise, True)])
-    self.step(n=L - 5)
-    start = self.helper.v_cruise_cluster_kph  # nothing yet before 1 s
-    self.step(n=10)
-    first = self.helper.v_cruise_cluster_kph
-    self.assertLess(first, start)
-    self.assertEqual(first % 10, 0)
-    self.assertGreater(first, start - 10.01)
-    self.step(n=L)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, first - LONG_PRESS_DOWN)
-    self.step(n=L)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, first - 2 * LONG_PRESS_DOWN)
-    self.step(events=[(ButtonType.decelCruise, False)])  # the release adds nothing
-    self.assertEqual(self.helper.v_cruise_cluster_kph, first - 2 * LONG_PRESS_DOWN)
-    self.step(events=[(ButtonType.decelCruise, True)])
-    self.step(n=20 * L)  # held long enough: down to the stop target and no further
-    self.step(events=[(ButtonType.decelCruise, False)])
-    self.assertEqual(self.helper.v_cruise_kph, 0.)
-
-  def test_long_press_minus_from_45_goes_40_30_0(self):
-    self.engage_with_set()
-    while self.helper.v_cruise_cluster_kph > 45.:
+    while self.helper.v_cruise_cluster_kph > 35.:
       self.tap(ButtonType.decelCruise, hold_frames=3)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 45.)
-    L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
-    self.step(events=[(ButtonType.decelCruise, True)])
-    seen = []
-    self.step(n=5)
-    for _ in range(6):
-      self.step(n=L)
-      seen.append(self.helper.v_cruise_cluster_kph)
-    self.step(events=[(ButtonType.decelCruise, False)])
-    self.assertEqual(seen, [40., 30., 0., 0., 0., 0.])  # owner 2026-11-07: from 30 straight to 0
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 35.)
+    for expect in (30., 30.):
+      self.long_press(ButtonType.decelCruise)
+      self.assertEqual(self.helper.v_cruise_cluster_kph, expect)
+    self.tap(ButtonType.decelCruise, hold_frames=3)
+    self.long_press(ButtonType.decelCruise)
+    self.assertEqual(self.helper.v_cruise_kph, 0.)
 
   def test_res_from_zero_at_standstill_returns_to_the_ceiling(self):
     self.engage_with_set()
