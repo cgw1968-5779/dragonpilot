@@ -11,7 +11,12 @@ at 1.5-3 m/s^3, holds about that decel, and eases off only in the last ~1.5 s.
 
 This is the planner's stop target (not a layer after it): while the lead is stopped,
   need = v^2 / (2 (dRel - STOP_GAP))   the constant decel that stops exactly at STOP_GAP
-  WAIT   need < START_NEED: no brake beyond a light lift (WAIT_ACCEL) - the plan's early light brake is not used
+  WAIT   need < START_NEED: a light lift (WAIT_ACCEL), and since 11-08 at least K_EARLY x need from the moment the
+         stopped lead is seen (owner 2026-11-08: "when a stopped car is seen far ahead it should start slowing down -
+         braking still starts too late"; route 000000f3: seen at 122 m at 49 km/h, -0.30 lift to 53 m, -1.8 from 52 m,
+         2.3 m. K_EARLY 0.6 at J_EARLY 0.6 m/s^3: point mass 49 km/h / 122 m -0.51 at 100 m, -0.66 at 60, -0.82 at 40,
+         mid -1.47 (was -1.82 from 52 m); closed-loop f0 23:09:52 40 m reached at 30 km/h (was 38), peak -1.86 ->
+         -1.48, 3.32 -> 3.61 m; f3 3.31 -> 3.44 m; ec 21:49 1.18 -> 2.97 m)
   BRAKE  -K_STOPPED * need (K_NEED for a lead that slowed to a stop, below), built at <= J_BUILD, eased at <= J_EASE
   RELEASE once easing at J_RELEASE would just reach the stopping controller's end line by END_V: ease linearly at
          J_RELEASE onto that line and follow it (never firmer than needed again: no second bite)
@@ -49,6 +54,8 @@ LEAD_STOPPED_V = 1.0    # m/s: lead slower than this counts as stopped
 START_NEED = 1.8        # m/s^2: start braking once the needed decel (0.5 s ahead) reaches this (owner's manual: 1.7-1.75)
 URGENT_NEED = 2.8       # m/s^2: from here the MPC may brake harder than this target
 WAIT_ACCEL = -0.30      # m/s^2: light lift while waiting
+K_EARLY = 0.6           # WAIT brakes at least this x the need from the moment the stopped lead is seen (11-08)
+J_EARLY = 0.6           # m/s^3: WAIT firming rate (a soft first touch far out)
 K_NEED = 1.2            # brake a little more than needed so the need falls slowly (owner's template ran 1.1-1.3)
 J_BUILD = 1.5           # m/s^3: brake build-up (owner 1.5-3)
 J_EASE = 0.8            # m/s^3: easing while braking
@@ -111,7 +118,9 @@ class StopApproach:
         self.wait_a = min(self.wait_a + WAIT_FB_RATE * self.dt, 0.0)
       else:
         self.wait_a = max(self.wait_a - J_BUILD * self.dt, WAIT_ACCEL)
-      out = self._step(max(a_mpc, self.wait_a), J_EASE, J_BUILD)
+      # not while the experimental feedback eases the lift (the car already slows harder than needed, e.g. uphill)
+      early = 0.0 if exp and self.wait_a > WAIT_ACCEL else -K_EARLY * need
+      out = self._step(min(max(a_mpc, self.wait_a), early), J_EASE, J_EARLY)
     else:
       goal = float(np.interp(v_ego, END_CURVE_V, END_CURVE_A))
       if self.phase == 'brake':

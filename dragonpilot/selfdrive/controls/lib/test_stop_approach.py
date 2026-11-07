@@ -34,14 +34,15 @@ def test_no_lead_and_moving_lead_pass_the_plan_through():
     assert sa.phase is None
 
 
-def test_far_stopped_lead_no_early_brake():
-  # 50 km/h, stopped car 100 m ahead: the needed decel is ~1.0 -> only the light lift, not the MPC's early -1.0
+def test_far_stopped_lead_brakes_gently_at_once():
+  # owner 2026-11-08: slow down as soon as the stopped car is seen. 50 km/h, 100 m: need ~0.99 -> K_EARLY x need,
+  # built at J_EARLY (soft first touch), not the MPC's -1.0
   sa = StopApproach(DT)
-  a = 0.0
-  for _ in range(40):
-    a = sa.update(50 / 3.6, lead(100.0), -1.0, False)
+  outs = [sa.update(50 / 3.6, lead(100.0), 0.2, False) for _ in range(40)]
   assert sa.phase == 'wait'
-  assert abs(a - SA.WAIT_ACCEL) < 1e-6
+  need = (50 / 3.6) ** 2 / (2 * (100.0 - SA.STOP_GAP))
+  assert abs(outs[-1] + SA.K_EARLY * need) < 1e-6
+  assert outs[0] >= -SA.J_EARLY * DT - 1e-9 and np.min(np.diff(outs)) >= -SA.J_EARLY * DT - 1e-9
 
 
 def test_build_is_linear_and_limited():
