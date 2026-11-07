@@ -85,3 +85,86 @@ def test_handback_is_rate_limited():
 def test_disengaged_is_untouched():
   sa = StopApproach(DT)
   assert sa.update(15.0, lead(30.0), 0.3, True) == 0.3
+
+
+# the committed stop target before the experimental-only changes (11-07), kept here so experimental-off stays identical
+class _Before11_07(StopApproach):
+  def update(self, v_ego, lead, a_mpc, off, exp=False, a_ego=None):
+    stopped_lead = (not off and lead is not None and bool(lead.status) and lead.vLead < SA.LEAD_STOPPED_V
+                    and 0.0 < lead.dRel < SA.MAX_DIST and v_ego > 0.3)
+    if not stopped_lead:
+      if self.phase in (None, 'handback') and (self.phase is None or abs(self.a - a_mpc) < 0.05):
+        self.phase = None
+        self.a = a_mpc
+        return a_mpc
+      self.phase = 'handback'
+      return self._step(a_mpc, SA.J_HANDBACK, SA.J_HANDBACK)
+    need = SA._need(v_ego, lead.dRel)
+    if self.phase in (None, 'handback'):
+      self.a = a_mpc if self.phase is None else self.a
+      self.phase = 'wait'
+    if self.phase == 'wait' and SA._need(v_ego, lead.dRel - v_ego * 0.5) >= SA.START_NEED:
+      self.phase = 'brake'
+    if self.phase == 'wait':
+      out = self._step(max(a_mpc, SA.WAIT_ACCEL), SA.J_EASE, SA.J_BUILD)
+    else:
+      goal = float(np.interp(v_ego, SA.END_CURVE_V, SA.END_CURVE_A))
+      if self.phase == 'brake':
+        a_end = float(np.interp(SA.END_V, SA.END_CURVE_V, SA.END_CURVE_A))
+        t_rel = max(a_end - self.a, 0.0) / SA.J_RELEASE
+        dv = -(self.a + a_end) / 2.0 * t_rel
+        if v_ego - SA.END_V <= dv or (v_ego < SA.END_CURVE_V[-1] and self.a >= goal):
+          self.phase = 'release'
+      if self.phase == 'brake':
+        out = self._step(-SA.K_NEED * need, SA.J_EASE, SA.J_BUILD)
+      else:
+        target = self.a if need > -self.a + 0.3 else min(goal, self.a + SA.J_RELEASE * self.dt)
+        self.a = out = max(target, self.a)
+    if need >= SA.URGENT_NEED and a_mpc < out:
+      self.a = out = a_mpc
+    return out
+
+
+def test_exp_off_is_unchanged():
+  # owner 2026-11-07: tuning experimental mode must not touch the non-experimental longitudinal - bit for bit
+  rng = np.random.default_rng(7)
+  for _ in range(200):
+    new, old = StopApproach(DT), _Before11_07(DT)
+    v, d, vl = rng.uniform(1, 20), rng.uniform(5, 120), rng.choice([0.0, 0.0, 3.0])
+    for _ in range(300):
+      a_mpc, a_ego = rng.uniform(-3.5, 0.5), rng.uniform(-2.0, 0.5)
+      ln = lead(d, vl, status=rng.random() > 0.05)
+      assert new.update(v, ln, a_mpc, False, False, a_ego) == old.update(v, ln, a_mpc, False)
+      assert new.phase == old.phase
+      v = max(0.0, v + rng.uniform(-0.15, 0.05)); d = max(0.5, d - v * DT + vl * DT)
+
+
+def test_exp_starts_earlier():
+  # experimental looks 1.0 s ahead: the BRAKE phase starts further back than with experimental off
+  def start_d(exp):
+    sa, v, x = StopApproach(DT), 50 / 3.6, 0.0
+    while True:
+      sa.update(v, lead(100.0 - x), -0.3, False, exp, None)
+      if sa.phase == 'brake':
+        return 100.0 - x
+      x += v * DT
+  assert start_d(True) > start_d(False) + 3.0
+
+
+def test_exp_wait_follows_the_real_decel():
+  # 11-06 21:51: 8 km/h, stopped lead 12.7 m ahead, the car slows -0.8 on the -0.30 lift (uphill) -> the lift eases
+  sa = StopApproach(DT)
+  outs = [sa.update(8.3 / 3.6, lead(12.7), -0.3, False, True, -0.8) for _ in range(20)]
+  assert sa.phase == 'wait'
+  assert outs[-1] > SA.WAIT_ACCEL + 0.2 and max(outs) <= 0.0  # eased, never gas
+  assert np.max(np.diff(outs)) <= SA.WAIT_FB_RATE * DT + 1e-9
+  # experimental off: unchanged light lift
+  sa = StopApproach(DT)
+  assert sa.update(8.3 / 3.6, lead(12.7), -0.3, False, False, -0.8) == SA.WAIT_ACCEL
+  # the car no longer slows harder than needed -> back to the light lift
+  sa = StopApproach(DT)
+  for _ in range(20):
+    sa.update(8.3 / 3.6, lead(12.7), -0.3, False, True, -0.8)
+  for _ in range(20):
+    a = sa.update(8.3 / 3.6, lead(12.7), -0.3, False, True, -0.1)
+  assert abs(a - SA.WAIT_ACCEL) < 1e-9
