@@ -12,7 +12,7 @@ at 1.5-3 m/s^3, holds about that decel, and eases off only in the last ~1.5 s.
 This is the planner's stop target (not a layer after it): while the lead is stopped,
   need = v^2 / (2 (dRel - STOP_GAP))   the constant decel that stops exactly at STOP_GAP
   WAIT   need < START_NEED: no brake beyond a light lift (WAIT_ACCEL) - the plan's early light brake is not used
-  BRAKE  -K_NEED * need, built at <= J_BUILD, eased at <= J_EASE (need falls slowly while K_NEED > 1)
+  BRAKE  -K_STOPPED * need (K_NEED for a lead that slowed to a stop, below), built at <= J_BUILD, eased at <= J_EASE
   RELEASE once easing at J_RELEASE would just reach the stopping controller's end line by END_V: ease linearly at
          J_RELEASE onto that line and follow it (never firmer than needed again: no second bite)
 Anything else - a moving lead, no lead, an urgent need (>= URGENT_NEED) where the MPC brakes harder, standstill,
@@ -26,12 +26,15 @@ before and the target is already firmer than WAIT_ACCEL, the approach goes strai
 J_EASE), so it keeps the decel that stops at the gap and ends through the normal RELEASE. A lead first seen already
 stopped (the far approach) is unchanged.
 
-Experimental mode only (owner 2026-11-07: "tuning experimental mode must not touch the non-experimental longitudinal";
-with experimental mode off every output is exactly as before, see test_exp_off_is_unchanged):
-  - the start looks T_PRE_EXP (1.0 s) ahead, not T_PRE: 11-06 21:55 a stopped lead seen at 94 m, the brake started at
-    37 m and the send side's soft onset lagged ~0.5 s behind it, so the car peaked at -2.65 and stopped at 2.6 m;
-  - it brakes K_NEED_EXP x the need: with the earlier start K_NEED 1.2 eased the mid brake -1.7 -> -1.1 and the sim
-    ended 3.7-3.9 m back (a closer aim, 2.5-2.9 m, barely moved it); 1.05 holds the mid brake steady;
+Earlier start behind a stopped lead (first experimental only 0383453b; owner 2026-11-07 night for every mode: "stops
+behind a stopped car start braking far too late"; route 000000f0 23:09:52, non-experimental, stopped lead seen at 110 m
+at 43 km/h, brake from 38.6 m, peak -2.69, stopped 2.4 m then crept to 1.5 m):
+  - the start looks T_PRE (1.0 s, was 0.5) ahead: 11-06 21:55 / 11-07 23:09 the brake started at 37-39 m and the send
+    side's soft onset lagged ~0.5 s behind it, so the car peaked at -2.6/-2.7;
+  - it brakes K_STOPPED (1.05) x the need: with the earlier start K_NEED 1.2 eased the mid brake -1.7 -> -1.1 and the sim
+    ended 3.7-3.9 m back; 1.05 holds the mid brake steady (sim 23:09:52 3.53 -> 3.32 m, peak -2.54 -> -1.86, 40 m
+    -0.40 -> -1.01; 09:19 template 3.44 -> 3.30 m);
+Experimental mode only (owner 2026-11-07: "tuning experimental mode must not touch the non-experimental longitudinal"):
   - WAIT follows the car's real decel: 11-06 21:51 (uphill ~4 %, 8 km/h, lead stopped 13.8 m ahead) the light lift
     -0.30 delivered -0.8 and the car stopped 8.7 m back. While the car slows harder than the need (+ WAIT_FB_MARGIN),
     the lift eases toward 0 at WAIT_FB_RATE; as soon as it does not, it comes back to WAIT_ACCEL at J_BUILD and the
@@ -56,9 +59,8 @@ END_V = 5.0 / 3.6       # m/s: the release reaches the end line by here
 END_CURVE_V = [0.0, 1.0 / 3.6, 2.0 / 3.6, 3.0 / 3.6, 4.0 / 3.6, 5.0 / 3.6, 6.0 / 3.6, 7.0 / 3.6, 8.0 / 3.6]
 END_CURVE_A = [-0.34, -0.36, -0.37, -0.37, -0.40, -0.45, -0.50, -0.57, -0.65]
 MAX_DIST = 150.0        # m
-T_PRE = 0.5             # s: the start looks this far ahead (the build and the car's lag)
-T_PRE_EXP = 1.0         # s: experimental mode
-K_NEED_EXP = 1.05       # experimental mode: the earlier start already has margin, so brake closer to the need
+T_PRE = 1.0             # s: the start looks this far ahead (the build and the car's lag; 0.5 until 11-07)
+K_STOPPED = 1.05        # a lead first seen stopped: the earlier start already has margin, so brake closer to the need
 WAIT_FB_MARGIN = 0.15   # m/s^2: experimental WAIT eases only while the car slows this much harder than the need
 WAIT_FB_RATE = 0.6      # m/s^3: how fast the experimental WAIT lift eases toward 0
 
@@ -74,6 +76,7 @@ class StopApproach:
     self.a = 0.0
     self.wait_a = WAIT_ACCEL  # experimental WAIT lift (follows the car's real decel)
     self.lead_moving = False  # the lead was tracked moving the frame before
+    self.moved = False        # this approach started from a lead that slowed to a stop (K_NEED, not K_STOPPED)
 
   def _step(self, target, up, down):
     """move self.a toward target: up = easing rate (toward 0/positive), down = firming rate"""
@@ -97,8 +100,9 @@ class StopApproach:
     need = _need(v_ego, lead.dRel)
     if self.phase in (None, 'handback'):
       self.a = a_mpc if self.phase is None else self.a
-      self.phase = 'brake' if was_moving and self.a < WAIT_ACCEL else 'wait'
-    need_pre = _need(v_ego, lead.dRel - v_ego * (T_PRE_EXP if exp else T_PRE))
+      self.moved = was_moving and self.a < WAIT_ACCEL
+      self.phase = 'brake' if self.moved else 'wait'
+    need_pre = _need(v_ego, lead.dRel - v_ego * T_PRE)
     if self.phase == 'wait' and need_pre >= START_NEED:
       self.phase = 'brake'
 
@@ -117,7 +121,7 @@ class StopApproach:
         if v_ego - END_V <= dv or (v_ego < END_CURVE_V[-1] and self.a >= goal):
           self.phase = 'release'
       if self.phase == 'brake':
-        out = self._step(-(K_NEED_EXP if exp else K_NEED) * need, J_EASE, J_BUILD)
+        out = self._step(-(K_NEED if self.moved else K_STOPPED) * need, J_EASE, J_BUILD)
       else:
         # ease at J_RELEASE onto the end line, then follow it; hold (do not ease further) while the need runs ahead,
         # never firm up again
