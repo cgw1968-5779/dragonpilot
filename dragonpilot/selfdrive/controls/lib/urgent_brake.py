@@ -35,6 +35,19 @@ LEAD_MOVING_V = 3.0     # m/s
 REGIME_V = 50.0 / 3.6   # m/s
 REGIME_HW = 2.0         # s
 REGIME_A = -1.75        # m/s^2
+# owner 2026-11-08 (later): "back to the soft-brake principle - every brake starts soft (40-60 km/h keeps a safe gap,
+# follow_gap.py); only an unusual cut-in that suddenly puts a lead very close skips the soft start and goes to a
+# possible emergency brake". So an ordinary switch-on (need / regime above) starts with SOFT_T of soft build at
+# SOFT_J, then goes to ACCEL_MIN ("0.1 s after the start, straight to the maximum"); a CUT-IN goes there at once.
+SOFT_T = 0.1            # s
+SOFT_J = 3.0            # m/s^3 (-0.3 in the first 0.1 s)
+# cut-in: a lead that appears (newly tracked, or the lead jumps CUTIN_JUMP closer between radar frames) within
+# CUTIN_HW x v at >= CUTIN_V; for CUTIN_T after it, need >= CUTIN_NEED switches on without the soft start
+CUTIN_V = 20.0 / 3.6    # m/s
+CUTIN_HW = 1.0          # s
+CUTIN_JUMP = 5.0        # m
+CUTIN_T = 2.0           # s
+CUTIN_NEED = 1.5        # m/s^2
 J_HANDBACK = 2.0        # m/s^3
 
 
@@ -54,6 +67,10 @@ class UrgentBrake:
     self.active = False
     self.handback = False
     self.a = 0.0
+    self.t_on = 0.0         # time since switching on
+    self.soft = True        # this switch-on starts soft
+    self.prev_d = None      # last lead distance (cut-in detection)
+    self.cutin_t = 0.0      # time left in the cut-in window
 
   def update(self, v_ego: float, lead, a_plan: float, off: bool) -> float:
     if off or lead is None or not lead.status:
@@ -62,18 +79,34 @@ class UrgentBrake:
     else:
       need = need_decel(v_ego, lead.dRel, lead.vLead, lead.aLeadK)
       moving = lead.vLead >= LEAD_MOVING_V
+    # cut-in detection: a lead appearing / jumping much closer, already within CUTIN_HW
+    d_now = lead.dRel if (not off and lead is not None and lead.status) else None
+    appeared = d_now is not None and (self.prev_d is None or self.prev_d - d_now >= CUTIN_JUMP)
+    if appeared and v_ego >= CUTIN_V and d_now <= CUTIN_HW * v_ego:
+      self.cutin_t = CUTIN_T
+    else:
+      self.cutin_t = max(self.cutin_t - self.dt, 0.0)
+    self.prev_d = d_now
     if off:
       self.active = self.handback = False
       return a_plan
     regime = (not off and lead is not None and lead.status and moving and v_ego >= REGIME_V and
               lead.dRel <= REGIME_HW * v_ego and lead.aLeadK <= REGIME_A)
     if not self.active:
-      if regime or (v_ego >= V_ON and need >= (NEED_ON if moving else NEED_ON_STOPPED)):
-        self.active, self.handback = True, False
+      cutin = self.cutin_t > 0.0 and need >= CUTIN_NEED
+      if cutin or regime or (v_ego >= V_ON and need >= (NEED_ON if moving else NEED_ON_STOPPED)):
+        self.soft = not cutin
+        if not self.handback:
+          self.a = a_plan
+        self.active, self.handback, self.t_on = True, False, 0.0
     elif need < NEED_OFF or v_ego < V_OFF:
       self.active, self.handback = False, True
     if self.active:
-      self.a = ACCEL_MIN
+      self.t_on += self.dt
+      if self.soft and self.t_on <= SOFT_T + 1e-9:
+        self.a = min(a_plan, self.a - SOFT_J * self.dt)  # the soft start (never lighter than the plan)
+      else:
+        self.a = ACCEL_MIN
       return self.a
     if self.handback:
       self.a = min(a_plan, self.a + J_HANDBACK * self.dt)

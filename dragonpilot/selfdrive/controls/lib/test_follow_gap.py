@@ -30,10 +30,13 @@ def test_opening_already_or_far_enough_needs_nothing():
   assert out >= -1e-9
 
 
-def test_band_40_60_only():
-  for v in (30.0, 70.0):
+def test_from_40_kmh_up():
+  fg = G.FollowGap(DT)
+  assert fg.update(30 * KPH, lead(10.0, 30), 0.3, False) == 0.3            # below 35 km/h: untouched
+  for v in (70.0, 100.0):                                                   # highway too (owner: 40 km/h and above)
     fg = G.FollowGap(DT)
-    assert fg.update(v * KPH, lead(10.0, v), 0.3, False) == 0.3
+    outs = [fg.update(v * KPH, lead(1.6 * v * KPH + 6, v), 0.2, False) for _ in range(40)]
+    assert outs[0] <= 0.0 and min(outs) < -0.2
   fg = G.FollowGap(DT)
   assert fg.update(58 * KPH, lead(30.0, 0.0), 0.3, False) == 0.3           # stopped lead: not this module
 
