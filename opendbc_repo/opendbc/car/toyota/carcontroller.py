@@ -232,6 +232,9 @@ class CarController(CarControllerBase):
 
         # internal PCM gas command can get stuck unwinding from negative accel so we apply a generous rate limit
         pcm_accel_cmd = actuators.accel
+        # dragonpilot hook (dpcr 2026-11-08, route f8 00:39): the plan at full brake above 20 km/h (urgent_brake.py or the
+        # MPC itself) is sent as is - no soft onset, no PID back-off (that backed -3.5 off to -2.6..-3.1 on f8 00:39)
+        max_brake = CC.longActive and actuators.accel <= self.params.ACCEL_MIN + 1e-3 and CS.out.vEgo > 20.0 / 3.6
         lead_one = self.lead_one if self.lead_one is not None else _NO_LEAD
         self.engage_onset.cruise_state(CS.out.cruiseState.enabled)  # tncr1 hook
         if CC.longActive:
@@ -247,7 +250,7 @@ class CarController(CarControllerBase):
                                                      engage_j_down=self.engage_close.j_down if self.engage_close.active else None,
                                                      lead=lead_one)  # tncr1 hook
           windup_step = self.engage_onset.up_step(True)
-          pcm_accel_cmd = rate_limit(pcm_accel_cmd, self.prev_accel, winddown_step, windup_step)
+          pcm_accel_cmd = rate_limit(pcm_accel_cmd, self.prev_accel, winddown_step, windup_step) if not max_brake else self.params.ACCEL_MIN
         else:
           self.brake_onset.reset()
           self.engage_onset.reset()
@@ -292,12 +295,13 @@ class CarController(CarControllerBase):
           pcm_accel_cmd = self.long_pid.update(error_future,
                                                speed=CS.out.vEgo,
                                                feedforward=pcm_accel_cmd,
-                                               freeze_integrator=actuators.longControlState != LongCtrlState.pid or freeze_i)
+                                               freeze_integrator=actuators.longControlState != LongCtrlState.pid or freeze_i or max_brake)
           pcm_accel_cmd = self.brake_corrections.apply(pcm_accel_cmd, self.prev_accel, a_ego_future, CS.out.vEgo, stopping,
                                                        fcw_alert, a_ego=a_ego_blended,
                                                        relaxed=hud_control.leadDistanceBars == 3,
                                                        handover=not self.engage_close.active)  # tncr1 hook
           pcm_accel_cmd = self.delivery_trim.apply(pcm_accel_cmd, CS.out.vEgo, CS.out.standstill, CC.longActive)  # tncr1 hook
+          pcm_accel_cmd = self.params.ACCEL_MIN if max_brake else pcm_accel_cmd  # dragonpilot hook: full brake, see above
           pcm_accel_cmd = end_force_cap(pcm_accel_cmd, actuators.accel, CS.out.vEgo, CS.out.standstill)  # tncr1 hook
         else:
           self.long_pid.reset()
