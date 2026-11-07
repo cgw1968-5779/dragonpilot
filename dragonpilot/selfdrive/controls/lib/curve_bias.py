@@ -27,7 +27,13 @@ CURVE_OUTWARD_V_BP = [v * CV.KPH_TO_MS for v in (30., 50., 60., 70., 90., 100., 
 # dpcr, owner 2026-11-03 night (after the first road test of these values: "FRAC clearly improved curve centring"):
 # 60 and 70 km/h +0.02 (0.085 -> 0.105, 0.09 -> 0.11); then 60 km/h +0.005 more (0.105 -> 0.11).
 # dpcr, owner 2026-11-05 night: 50 km/h +0.02 (0.06 -> 0.08).
-CURVE_OUTWARD_FRAC_V = [0.0, 0.08, 0.11, 0.11, 0.155, 0.155, 0.155]
+# dpcr, owner 2026-11-07 (route 000000f2 23:41-23:42, ALKA: right curve R 120-190 m at 50-68 km/h, left curve R 70-80 m
+# at 46 km/h, "close to / riding the inside line - centre it"): f2 segs 7-9 sat 0.4-0.7 m inside, the 11-03..11-06 routes
+# 0.1-0.6 m inside in 40-70 km/h curves. 50 / 60 / 70 km/h 0.08 / 0.11 / 0.11 -> 0.13 / 0.16 / 0.13. Closed-loop
+# perturbation sim (routes d3 / e3 / e4 rlog, model pull-back 1.5-2.5 s): 55-70 km/h curves 6-30 cm further out, 40-55
+# km/h 3-11 cm, straights and command jerk unchanged (p95 3.6 -> 3.5). Lane-line feedback (the PD centering or line mode)
+# below 70 km/h was tried first: in curves the model's near and far lane estimates disagree and both pushed INWARD.
+CURVE_OUTWARD_FRAC_V = [0.0, 0.13, 0.16, 0.13, 0.155, 0.155, 0.155]
 
 
 def apply_curve_outward_bias(desired_curvature: float, v_ego: float) -> float:
