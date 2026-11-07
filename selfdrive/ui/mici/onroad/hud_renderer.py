@@ -216,6 +216,8 @@ class HudRenderer(Widget):
 
     # color and draw
     color = rl.Color(255, 255, 255, int(self._wheel_alpha_filter.x))
+    if ui_state.sm['selfdriveState'].experimentalMode and not self._show_wheel_critical:
+      color = rl.Color(235, 40, 40, int(self._wheel_alpha_filter.x))  # dragonpilot hook (dpcr, owner 2026-11-08): red wheel in experimental mode
     rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, rotation, color)
 
     if self._show_wheel_critical:
