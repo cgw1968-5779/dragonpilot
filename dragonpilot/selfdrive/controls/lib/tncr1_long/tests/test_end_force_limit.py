@@ -5,7 +5,7 @@
 # Part of a sunnypilot-based project, distributed under the sunnypilot license (see LICENSE.md and NOTICE).
 import numpy as np
 from openpilot.common.realtime import DT_CTRL
-from dragonpilot.selfdrive.controls.lib.tncr1_long.end_force_limit import EndForceLimit, V_LINE, END_ACCEL, CEIL_BP, CEIL_A, \
+from dragonpilot.selfdrive.controls.lib.tncr1_long.end_force_limit import EndForceLimit, HOLD_RATE, POST_T, V_LINE, END_ACCEL, CEIL_BP, CEIL_A, \
   END_RELEASE_RATE, END_FIRM_RATE, END_GAP_MIN
 
 
@@ -36,7 +36,7 @@ def test_standstill_continues_into_the_hold_without_a_step():
   assert EndForceLimit().update(-0.6, 0.0, False, True) == END_ACCEL
   assert e.update(-0.6, 0.0, False, True, -0.5) == END_ACCEL      # at the stop the line is back on END_ACCEL
   out = e.update(-1.2, 0.0, True, True)                           # the hold asks -1.2 at once
-  assert abs(out - (END_ACCEL - 0.005)) < 1e-9                    # firms up at 0.5 m/s^3
+  assert abs(out - (END_ACCEL - HOLD_RATE * DT_CTRL)) < 1e-9     # firms up at HOLD_RATE
   for _ in range(300):
     out = e.update(-1.2, 0.0, True, True)
   assert out == -1.2 and e.out is None
@@ -83,7 +83,7 @@ def test_fixed_ceiling_from_5kph_caps_everything():  # tncr 2026-10-15 evening: 
   e3.update(-2.7, 1.0 / 3.6, False, True)
   assert e3.update(-2.7, 0.0, False, True, -0.5) == END_ACCEL
   out = e3.update(-1.2, 0.0, True, True)
-  assert abs(out - (END_ACCEL - 0.005)) < 1e-9
+  assert abs(out - (END_ACCEL - HOLD_RATE * DT_CTRL)) < 1e-9
 
 
 def _arrive(e, a0, v0, decel, lead_d=None, lead_v=None, req=None):
@@ -141,3 +141,27 @@ def test_creep_toward_a_stopped_lead_is_held_gradually():
   assert min(outs) >= -0.8                                          # never firmer than the plan
   assert np.all(np.diff(outs) >= -END_FIRM_RATE * DT_CTRL - 1e-9)   # built gradually
   assert d > END_GAP_MIN - 0.5
+
+
+def test_rebound_right_after_the_stop_keeps_the_hold():
+  # dpcr 2026-11-08, route f3 23:58:49.6: stopped on -0.35, the rebound + creep rolled the car at 0.45-1.2 km/h and the
+  # end ceiling put the request back to -0.35 -> 0.7 m creep. Now the hold keeps firming through it
+  e = EndForceLimit()
+  e.update(-0.6, 2.0 / 3.6, False, True)
+  e.update(-0.6, 0.0, False, True, -0.5)
+  for _ in range(30):                                   # 0.3 s standing
+    out = e.update(-1.2, 0.0, True, True)
+  held = out
+  for _ in range(30):                                   # rebound: rolling 1 km/h, standstill flag off
+    out2 = e.update(-1.2, 1.0 / 3.6, False, True, 0.9)
+    assert out2 <= held + 1e-9                          # never back toward the end ceiling
+    held = out2
+  assert out2 < -0.8
+  # a real launch (request >= 0) ends it at once
+  assert e.update(0.4, 1.0 / 3.6, False, True) == 0.4
+  # after POST_T a roll is a roll again (the ceiling applies)
+  e = EndForceLimit()
+  e.update(-0.6, 0.0, True, True)
+  for _ in range(int(POST_T / DT_CTRL) + 5):
+    e.update(-1.2, 0.0, True, True)
+  assert e.update(-1.2, 1.0 / 3.6, False, True, 0.2) >= -0.37

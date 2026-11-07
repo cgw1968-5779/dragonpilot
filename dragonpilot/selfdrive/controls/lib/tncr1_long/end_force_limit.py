@@ -31,7 +31,16 @@ V_LINE = 2.0 / 3.6     # m/s
 END_ACCEL = -0.34      # m/s^2 at 0 km/h. tncr (Corolla Cross): -0.35 -> -0.34 (owner 2026-10-15 evening, "0.01 lighter");
                        # -0.35 was the Cross stop template (stopped at
                        # 800-840 N, no nod); the Altis rule above is -0.30 and stays so on tnpb3
-HOLD_RATE = 0.5        # m/s^3: after the stop, toward the standstill hold
+HOLD_RATE = 1.5        # m/s^3: after the stop, toward the standstill hold (0.5 until dpcr 2026-11-08, see POST_*)
+# dpcr, owner 2026-11-08 ("analyse it" - after two stops tonight the car moved again): route 000000f3 23:58:49.6 the
+# car stopped on -0.35, the hold firmed at 0.5 m/s^3 (-0.44 after 0.25 s), then the body's rebound plus the hybrid's
+# creep rolled it forward (+0.9..+1.05 m/s^2, standstill flag off at 0.45 km/h); the ceiling below 3 km/h put the
+# request straight back to -0.35 and the car crept 0.7 m at 1.2 km/h for 2 s before stopping again (route f0 23:09:50
+# the same, 0.9 m). AFTER the stop (owner rule 0 covers the force before it): the hold firms at HOLD_RATE 1.5 (-0.34 ->
+# -1.2 in ~0.6 s), and for POST_T after the first standstill a roll under POST_V counts as still standing - the hold
+# keeps firming instead of dropping back to the end ceiling. A launch (request >= 0) ends it at once.
+POST_T = 2.0           # s after the first standstill of a stop
+POST_V = 2.0 / 3.6     # m/s: a rebound / creep below this is still the stop
 # tncr (Corolla Cross), owner 2026-10-15 evening after route 00000073 17:16:08 (a stop that ended with 4120 N at
 # 2.7 km/h and -1.67 m/s^2 still on the car as the wheels stopped - the jolt): 'the car must, without exception, stop
 # on a force that cannot jolt; the end must ease smoothly down to -0.34 at 0 km/h; 5 km/h may still need a firm brake'.
@@ -129,6 +138,7 @@ class EndForceLimit:
     self.stall_t = 0.0
     self.sent = None     # last output while moving (for END_RELEASE_RATE / END_FIRM_RATE)
     self.holding = False # the dynamic end is holding firmer than the ceiling / line
+    self.post_t = None   # time since the first standstill of this stop (None = not stopped yet)
 
   def update(self, accel: float, v_ego: float, standstill: bool, long_active: bool, a_ego: float = -1.0,
              pitch: float | None = None, lead_d: float | None = None, lead_v: float | None = None) -> float:
@@ -137,6 +147,14 @@ class EndForceLimit:
     if not long_active or accel >= 0.0:
       self.reset()
       return accel
+    if standstill and self.post_t is None:
+      self.post_t = 0.0
+    if self.post_t is not None:
+      self.post_t += DT_CTRL
+      if not standstill and (v_ego > POST_V or self.post_t > POST_T):
+        self.post_t = None
+      else:
+        standstill = True  # a rebound / creep right after the stop is still the stop: keep the hold firming
     if standstill:
       self.sent, self.holding = None, False
       return self._update(accel, v_ego, standstill, a_ego, pitch)
