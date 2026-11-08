@@ -124,7 +124,7 @@ class LongitudinalPlanner:
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
-    accel_clip = [ACCEL_MIN, self.eco_ev.max_accel(sm, get_max_accel(v_ego))]  # dragonpilot hook
+    accel_clip = [ACCEL_MIN, self.eco_ev.max_accel(sm, long_control_off, get_max_accel(v_ego))]  # dragonpilot hook
     steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
     accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
 
