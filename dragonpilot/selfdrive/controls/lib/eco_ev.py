@@ -25,6 +25,25 @@ the MPC, the stopping logic and NORMAL / SPORT are untouched.
      - while a lead pulls away quickly (vLead > vEgo + 1.0 m/s, released at vEgo; 11-08, was +-0.5) between 20 and 30
        km/h and above; the weight moves at KEEP_UP_RATE so the catch-up builds smoothly.
    The engine-running eco line, normal and sport are untouched.
+4. Engine-off cruise line by grade (owner 2026-11-08: "below 100 km/h, battery above the allowed level, eco on flat or
+   downhill roads should use EV as much as possible"; dppb 0922510c method on C4 Cross data, 167 routes / 35.8 h,
+   dpcr_1108). Engaged with the engine off, the chance per second that the Cross restarts its engine, by request and
+   speed, on a FLAT road (grade within +-0.7 deg): 50-60 km/h +0.09..0.12 0 %, +0.12..0.16 6 %; 60-70 +0.03..0.06 1 %,
+   +0.06..0.09 5 %, +0.09..0.12 10 %; 70-80 +0.06..0.09 2 %, +0.09..0.12 20 %; 80-90 0..+0.03 5 %, +0.03..0.06 14 %,
+   +0.06..0.09 26 %; 90-100 <= 0 3 %, 0..+0.03 8 %. Line 1 (0.25 / 0.16 / 0.12 / 0.08 at 60 / 70 / 80 / 86 km/h) sat
+   at 14-48 % there. On a gentle DOWNHILL (-2..-0.7 deg) the same requests restart it only 0-6 % (gravity carries part
+   of the wheel power), uphill (> +0.7 deg) 13-31 % already at +0.03..0.09. So above 35 km/h, with the engine off:
+     flat line ECO_EV_FLAT_* 0.40 / 0.20 / 0.14 / 0.11 / 0.08 / 0.06 / 0.05 / 0.03 / 0.01 / 0
+       at 35 / 45 / 50 / 55 / 60 / 70 / 76 / 82 / 88 / 95 km/h (~3 %/s or less, flat),
+     downhill: + g * sin|grade| (the wheel power the slope gives), never above line 1,
+     uphill: back to line 1 over a grade of +0.3 -> +0.7 deg (uphill untouched),
+     unknown pitch: line 1.
+   grade = carControl pitch - FLAT_PITCH (+0.61 deg on a GPS-flat road, + = uphill), filtered with GRADE_TAU so the
+   ceiling does not follow IMU noise. It is only ever at or below line 1, i.e. today's ceiling or lower.
+   Because it is low, on a free road (no lead within max(60 m, 3.5 s), as ev_glide) and above 35 -> 40 km/h it gives
+   way to the normal eco line while the car is well under the set speed (3 -> 8 km/h, dppb's rule), so regaining the
+   set speed is not a slow crawl; behind a lead the pull-away rule above stays. When the engine stops above 35 km/h
+   the engine-off line comes in over EV_RATE (1 s) instead of at once; an engine start hands back at once (as before).
 """
 import math
 
@@ -46,6 +65,27 @@ EV_SOC_BP = [33., 37.]                      # % hybrid battery: low (ev_glide al
 KEEP_UP_V_BP = [20 / 3.6, 30 / 3.6]         # m/s: a lead pulling away takes the normal eco line from 20 -> 30 km/h
 KEEP_UP_ON, KEEP_UP_OFF = 1.0, 0.0          # m/s: vLead - vEgo hysteresis for "the lead pulls away quickly" (11-08: was 0.5 / -0.5)
 KEEP_UP_RATE = 0.5                          # 1/s: the keep-up weight moves at most this fast (smooth catch-up, 2 s)
+_K = 1 / 3.6
+ECO_EV_FLAT_BP = [35 * _K, 45 * _K, 50 * _K, 55 * _K, 60 * _K, 70 * _K, 76 * _K, 82 * _K, 88 * _K, 95 * _K]  # m/s (2026-11-08)
+ECO_EV_FLAT_MAX_ACCEL = [0.40, 0.20, 0.14, 0.11, 0.08, 0.06, 0.05, 0.03, 0.01, 0.0]
+CRUISE_V = 35 * _K                          # m/s: the cruise line applies above this (at 35 km/h it equals line 1)
+FLAT_PITCH = math.radians(0.61)             # rad: what a GPS-flat road reads (+ = uphill)
+UP_GRADE_BP = [math.radians(0.3), math.radians(0.7)]  # rad: uphill -> back to line 1
+GRADE_TAU = 2.0                             # s: grade filter
+G = 9.81
+DEFICIT_BP = [3 * _K, 8 * _K]               # m/s: set speed - v; well under the set speed on a free road -> normal eco line
+DEFICIT_V_BP = [35 * _K, 40 * _K]           # m/s: only in the cruise part
+FREE_D, FREE_T = 60.0, 3.5                  # m, s: no lead nearer than max(these) = free road
+EV_RATE = 1.0                               # 1/s: the engine-off weight comes in at most this fast above CRUISE_V
+
+
+def engine_off_line(v: float, grade: float) -> float:
+  """eco ceiling while the engine is off: line 1 below 35 km/h, the grade-aware cruise line above (never above line 1)"""
+  line1 = float(np.interp(max(0.0, v), ECO_ENGINE_OFF_BP, ECO_ENGINE_OFF_MAX_ACCEL))
+  if v <= CRUISE_V or not math.isfinite(grade):
+    return line1
+  a = min(line1, float(np.interp(v, ECO_EV_FLAT_BP, ECO_EV_FLAT_MAX_ACCEL)) + G * math.sin(max(-grade, 0.0)))
+  return a + float(np.interp(grade, UP_GRADE_BP, [0.0, 1.0])) * (line1 - a)
 
 
 class _Lead:
@@ -61,6 +101,8 @@ class EcoEv:
     self.glide_cap: float | None = None
     self.keep_up = False
     self.keep_w = 0.0  # smoothed keep-up weight
+    self.ev_w = 0.0    # engine-off weight (comes in at EV_RATE above CRUISE_V)
+    self.grade = None  # filtered grade, rad
 
   def max_accel(self, sm, long_control_off: bool, stock_max_accel: float) -> float:
     cs, cc = sm['carState'], sm['carControl']
@@ -69,14 +111,30 @@ class EcoEv:
     lead = sm['radarState'].leadOne
     dv = lead.vLead - cs.vEgo if lead.status else -math.inf
     self.keep_up = dv > KEEP_UP_ON or (self.keep_up and dv > KEEP_UP_OFF)
-    if eco and cs.engineOff:
-      a_ev = float(np.interp(max(0.0, cs.vEgo), ECO_ENGINE_OFF_BP, ECO_ENGINE_OFF_MAX_ACCEL))
+    pitch = cc.orientationNED[1] if len(cc.orientationNED) == 3 else math.inf  # unknown pitch: no glide
+    if math.isfinite(pitch):
+      g = pitch - FLAT_PITCH
+      self.grade = g if self.grade is None else self.grade + self.dt / (GRADE_TAU + self.dt) * (g - self.grade)
+    else:
+      self.grade = None
+    off = eco and cs.engineOff
+    if not off:
+      self.ev_w = 0.0
+    elif cs.vEgo <= CRUISE_V:
+      self.ev_w = 1.0
+    else:
+      self.ev_w = min(1.0, self.ev_w + EV_RATE * self.dt)
+    if off:
+      a_ev = engine_off_line(cs.vEgo, self.grade if self.grade is not None else math.nan)
       w = float(np.interp(cs.hvSoc, EV_SOC_BP, [0.0, 1.0])) if cs.hvSoc >= 0.0 else 1.0
       k_target = float(np.interp(cs.vEgo, KEEP_UP_V_BP, [0.0, 1.0])) if self.keep_up else 0.0
+      free_road = not lead.status or lead.dRel > max(FREE_D, FREE_T * cs.vEgo)
+      if free_road:
+        k_target = max(k_target, float(np.interp(cs.vEgo, DEFICIT_V_BP, [0.0, 1.0])) *
+                       float(np.interp(cs.vCruise * CV.KPH_TO_MS - cs.vEgo, DEFICIT_BP, [0.0, 1.0])))
       self.keep_w = float(np.clip(k_target, self.keep_w - KEEP_UP_RATE * self.dt, self.keep_w + KEEP_UP_RATE * self.dt))
-      w *= 1.0 - self.keep_w
+      w *= (1.0 - self.keep_w) * self.ev_w
       a_max = a_max + w * (a_ev - a_max)
-    pitch = cc.orientationNED[1] if len(cc.orientationNED) == 3 else math.inf  # unknown pitch: no glide
     self.glide_cap = self.ev_glide.update(eco, not long_control_off, cs.gasPressed or cs.brakePressed, cs.vEgo, cs.aEgo,
                                           cs.vCruise * CV.KPH_TO_MS, cs.engineOff, 0.0 if cs.engineOff else 1000.0,
                                           cs.hvSoc, pitch, cs.steeringAngleDeg, _Lead(sm['radarState'].leadOne))

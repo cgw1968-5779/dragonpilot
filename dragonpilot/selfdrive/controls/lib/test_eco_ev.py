@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace as N
 
 import numpy as np
@@ -8,21 +9,78 @@ from dragonpilot.selfdrive.controls.lib.drive_mode import drive_mode_max_accel
 V68 = 68.0 / 3.6
 
 
-def sm(drive_mode=0, engine_off=False, v=V68, soc=45.0, v_cruise_kph=68.0, lead=False, v_lead=None):
+def sm(drive_mode=0, engine_off=False, v=V68, soc=45.0, v_cruise_kph=68.0, lead=False, v_lead=None, pitch=0.0, d_rel=30.0):
   return {
     'carState': N(driveMode=drive_mode, engineOff=engine_off, vEgo=v, aEgo=0.0, gasPressed=False, brakePressed=False,
                   vCruise=v_cruise_kph, hvSoc=soc, steeringAngleDeg=0.0),
-    'carControl': N(orientationNED=[0.0, 0.0, 0.0]),
-    'radarState': N(leadOne=N(status=lead, dRel=30.0, vLead=v if v_lead is None else v_lead)),
+    'carControl': N(orientationNED=[] if pitch is None else [0.0, pitch, 0.0]),
+    'radarState': N(leadOne=N(status=lead, dRel=d_rel, vLead=v if v_lead is None else v_lead)),
   }
 
 
-def test_engine_off_eco_line():
+def settle(v_kph, grade_deg=0.0, n=200, **kw):
+  """engine off in eco at the set speed for n steps; grade relative to a flat road (None = unknown pitch)"""
+  pitch = None if grade_deg is None else E.FLAT_PITCH + math.radians(grade_deg)
   e = E.EcoEv(0.05)
-  for v_kph, want in ((60.0, 0.25), (70.0, 0.16), (80.0, 0.12)):
-    assert abs(e.max_accel(sm(engine_off=True, v=v_kph / 3.6, soc=45.0), False, 2.0) - want) < 0.01
+  kw.setdefault('v_cruise_kph', v_kph)
+  outs = [e.max_accel(sm(engine_off=True, v=v_kph / 3.6, pitch=pitch, **kw), False, 2.0) for _ in range(n)]
+  return outs
+
+
+def line1(v_kph):
+  return float(np.interp(v_kph / 3.6, E.ECO_ENGINE_OFF_BP, E.ECO_ENGINE_OFF_MAX_ACCEL))
+
+
+def test_engine_off_eco_line():
+  # 2026-11-08 flat cruise line (Cross restart chance ~3 %/s or less), lower than line 1
+  for v_kph, want in ((45.0, 0.20), (60.0, 0.08), (70.0, 0.06), (80.0, 0.037), (88.0, 0.01), (95.0, 0.0)):
+    assert abs(settle(v_kph)[-1] - want) < 0.01, v_kph
+    assert settle(v_kph)[-1] <= line1(v_kph) + 1e-9
   # engine running: the normal eco line
+  e = E.EcoEv(0.05)
   assert abs(e.max_accel(sm(engine_off=False, soc=10.0), False, 2.0) - drive_mode_max_accel(V68, 0, 2.0)) < 1e-9
+
+
+def test_engine_off_line_by_grade():
+  for v_kph in (40.0, 50.0, 60.0, 70.0, 80.0, 90.0):
+    flat = settle(v_kph)[-1]
+    down1 = settle(v_kph, -1.0)[-1]
+    want = min(line1(v_kph), float(np.interp(v_kph / 3.6, E.ECO_EV_FLAT_BP, E.ECO_EV_FLAT_MAX_ACCEL)) +
+               9.81 * math.sin(math.radians(1.0)))
+    assert abs(down1 - want) < 0.005, v_kph                     # downhill: + g sin|grade| ...
+    assert flat <= down1 <= line1(v_kph) + 1e-9                  # ... never above line 1
+    assert abs(settle(v_kph, 1.0)[-1] - line1(v_kph)) < 1e-6     # uphill: line 1 untouched
+    assert abs(settle(v_kph, None)[-1] - line1(v_kph)) < 1e-6    # unknown pitch: line 1
+
+
+def test_engine_off_line_never_above_line_1_and_launch_untouched():
+  for v_kph in np.arange(0.0, 130.0, 2.5):
+    for g in (-6.0, -2.0, -1.0, -0.3, 0.0, 0.3, 0.5, 0.7, 2.0, 6.0):
+      a = E.engine_off_line(v_kph / 3.6, math.radians(g))
+      assert a <= line1(v_kph) + 1e-9
+      if v_kph <= 35.0:
+        assert a == line1(v_kph)
+
+
+def test_engine_stop_above_35_comes_in_over_a_second():
+  e = E.EcoEv(0.05)
+  s_on = sm(engine_off=False, v=70 / 3.6, v_cruise_kph=70.0, pitch=E.FLAT_PITCH)
+  s_off = sm(engine_off=True, v=70 / 3.6, v_cruise_kph=70.0, pitch=E.FLAT_PITCH)
+  for _ in range(20):
+    e.max_accel(s_on, False, 2.0)
+  outs = [e.max_accel(s_off, False, 2.0) for _ in range(40)]
+  full = drive_mode_max_accel(70 / 3.6, 0, 2.0) - 0.06
+  assert max(a - b for a, b in zip(outs, outs[1:], strict=False)) <= E.EV_RATE * 0.05 * full + 1e-6
+  assert abs(outs[-1] - 0.06) < 0.005
+
+
+def test_free_road_well_under_the_set_speed_gives_way():
+  eco = drive_mode_max_accel(60 / 3.6, 0, 2.0)
+  assert abs(settle(60.0, v_cruise_kph=70.0)[-1] - eco) < 1e-6           # 10 km/h under, nothing ahead: eco line
+  assert abs(settle(60.0, v_cruise_kph=62.0)[-1] - 0.08) < 0.01          # 2 km/h under: EV line
+  near = settle(60.0, v_cruise_kph=70.0, lead=True, d_rel=30.0)[-1]       # lead near (not pulling away): EV line
+  assert abs(near - 0.08) < 0.01
+  assert abs(settle(30.0, v_cruise_kph=60.0)[-1] - line1(30.0)) < 1e-9   # launch part: never
 
 
 def test_normal_and_sport_untouched():

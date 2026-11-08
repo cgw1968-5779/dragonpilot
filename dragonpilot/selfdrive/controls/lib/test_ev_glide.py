@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 
 import dragonpilot.selfdrive.controls.lib.ev_glide as EG
@@ -71,3 +72,14 @@ def test_driver_or_set_speed_change_ends_it():
     run(g, 5)
     run(g, 1, **kw)
     assert g.state in ("release", "idle"), kw
+
+
+def test_speed_and_grade_window_2026_11_08():
+  flat = EG.FLAT_PITCH
+  for kw in (dict(v_ego=90 / 3.6, v_cruise=90 / 3.6), dict(pitch=flat + math.radians(-1.9)), dict(pitch=flat)):
+    g = EvGlide(DT)
+    assert warm(g)[-1] is not None, kw                                   # 90 km/h and a -1.9 deg grade now glide
+  for kw in (dict(v_ego=97 / 3.6, v_cruise=97 / 3.6), dict(pitch=flat + math.radians(-2.2)),
+             dict(pitch=EG.PITCH_MAX + 0.001), dict(pitch=math.inf), dict(pitch=math.nan)):
+    g = EvGlide(DT)
+    assert all(c is None for c in run(g, 600, **kw)), kw

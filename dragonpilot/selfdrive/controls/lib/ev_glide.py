@@ -25,13 +25,28 @@ import numpy as np
 # the owner saw a full battery while it read 35-36, so SOC_MIN is 35 for now (40 would never have fired on route ba,
 # 35 gives 7 tries in 2.5 h open loop, 21:45 among them), to be calibrated against bar readings. A low battery is also
 # protected by the hybrid ECU itself (it simply keeps the engine on) and by RETRY_FAIL_T.
+#
+# 2026-11-08 (owner: "below 100 km/h, battery above the allowed level, eco on flat or downhill roads should use EV as
+# much as possible"), C4 Cross data 10-15..11-08, 167 routes / 35.8 h (dpcr_1108):
+# - Speed: the Cross never ran engine-off above 97 km/h (engaged engine-off p99 91 km/h). With the request <= -0.2
+#   held >= 2 s the engine stopped in 76 % at 85-90 km/h and 50 % at 90-100 km/h (flat), 0 of 213 natural lifts at
+#   95-100. V_MAX 85 -> 95 km/h (open loop over the 35.8 h: 59 -> 163 entries, the new ones at 85-95 km/h).
+# - Pitch: carControl.orientationNED[1] is + nose UP (uphill): vs the GPS altitude grade over 6385 10-s windows corr
+#   0.88, and coasting off-pedal aEgo = -0.139 x pitch(deg). A GPS-flat road reads +0.61 deg (FLAT_PITCH), so the old
+#   |pitch| <= 1.2 deg was really a grade of -1.8 .. +0.6 deg. The uphill side stays exactly as it was (PITCH_MAX);
+#   downhill now reaches a grade of -2.0 deg (GRADE_MIN): engaged engine-off restart chance per s (request -0.3..
+#   +0.05, 40-100 km/h) is 0.5-1.4 % from -0.5 to -2.0 deg, 3.9 % at -2.0..-2.5, 8.7 % at -2.5..-3.0, 59 % below
+#   -3.5 (the hybrid starts the engine itself on a steep descent, at any SOC), and lifts on grades below -2 deg
+#   stopped the engine only 4-12 %.
 V_MIN = 55.0 / 3.6          # m/s
-V_MAX = 85.0 / 3.6          # m/s
+V_MAX = 95.0 / 3.6          # m/s (2026-11-08, was 85)
 SOC_MIN = 35.0              # HV_SOC_PCT
 STEADY_DV = 2.0 / 3.6       # m/s: |v - set speed| within this ...
 STEADY_A = 0.25             # m/s^2: ... and |aEgo| below this ...
 STEADY_T = 5.0              # s: ... for this long
-PITCH_MAX = math.radians(1.2)  # route ba 21:44, a road the owner calls flat, read 0.8 deg (~1.4 %)
+PITCH_MAX = math.radians(1.2)  # route ba 21:44, a road the owner calls flat, read 0.8 deg (~1.4 %); uphill limit, unchanged
+FLAT_PITCH = math.radians(0.61)  # what a GPS-flat road reads (C4, 2026-11-08)
+GRADE_MIN = math.radians(-2.0)   # downhill limit as a grade (pitch - FLAT_PITCH)
 ANGLE_MAX = 5.0             # deg steering wheel
 LEAD_T = 3.5                # s: a lead nearer than this time gap (or LEAD_D_MIN) blocks it ...
 LEAD_D_MIN = 60.0           # m
@@ -62,7 +77,7 @@ class EvGlide:
   def _ready(self, v_ego, a_ego, v_cruise, engine_off, soc, pitch, angle, lead) -> bool:
     if not (V_MIN <= v_ego <= V_MAX) or engine_off or not math.isfinite(soc) or soc < SOC_MIN or soc > 100.0:
       return False
-    if abs(pitch) > PITCH_MAX or abs(angle) > ANGLE_MAX:
+    if not (FLAT_PITCH + GRADE_MIN <= pitch <= PITCH_MAX) or abs(angle) > ANGLE_MAX:
       return False
     if lead is not None and lead.present and (lead.dRel < max(LEAD_D_MIN, LEAD_T * v_ego) or lead.vLead < v_ego - LEAD_DV):
       return False
