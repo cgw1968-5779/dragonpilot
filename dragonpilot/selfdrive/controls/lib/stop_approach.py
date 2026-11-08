@@ -44,6 +44,19 @@ Experimental mode only (owner 2026-11-07: "tuning experimental mode must not tou
     -0.30 delivered -0.8 and the car stopped 8.7 m back. While the car slows harder than the need (+ WAIT_FB_MARGIN),
     the lift eases toward 0 at WAIT_FB_RATE; as soon as it does not, it comes back to WAIT_ACCEL at J_BUILD and the
     normal BRAKE start (need >= START_NEED) is unchanged. Never positive (no gas toward a stopped car).
+
+A slow lead braking to a stop close ahead (owner 2026-11-08 13:05, route 000000fa: "the brake before 5 km/h was too
+heavy"): a cut-in lead braked from 36 km/h to a stop 4-5 m ahead; it kept rolling at 3-12 km/h until the very end, so
+the MPC (which keeps STOP_DISTANCE 6 m) drove the stop and asked -2.7 at 17 km/h, -2.1 at 9.5, -1.5 at 6.4, -1.1 at
+4.5 km/h (the car -2.8 / -2.35 / -1.8 / -1.2) - about twice what stopping at the lead's own stop point needed
+(-2.2 / -1.5 / -0.8 / -0.5 with K_NEED). Then the car stopped short at 4.4 m, the command dropped to the end line, it
+crept forward and stood at 1.8 m. Now a lead slower than V_STOPPING that brakes at least A_STOPPING and will stop within
+S_STOPPING is aimed at like a stopped lead, at the point where it will stand (dRel + vLead^2 / (2 aLead)), with the same
+phases; the stop point stays in use (aLead floored at A_STOPPING) until the lead stands, speeds up past V_STOPPING + 1 or
+accelerates (A_LEAD_GO), and only below V_EGO_STOPPING. Closed loop (sim_stop2 with the recorded lead decel fed to the
+MPC as on the car, 25 stops): stopped-lead stops identical; 11 moving-lead stops that ended 4.4-5.5 m back now 3.2-4.5 m
+(10-26 22:26:54 5.49 -> 5.30), the decel at 5 km/h lighter (13:05 -1.66 -> -1.43, 10-29 19:39 -1.45 -> -1.19, 10-25
+20:39 -1.96 -> -1.52) and the mid brake up to 0.16 firmer.
 """
 import numpy as np
 
@@ -70,6 +83,32 @@ T_PRE = 1.0             # s: the start looks this far ahead (the build and the c
 K_STOPPED = 1.05        # a lead first seen stopped: the earlier start already has margin, so brake closer to the need
 WAIT_FB_MARGIN = 0.15   # m/s^2: experimental WAIT eases only while the car slows this much harder than the need
 WAIT_FB_RATE = 0.6      # m/s^3: how fast the experimental WAIT lift eases toward 0
+# a slow lead that is braking to a stop close ahead: aim at the point where it will stop
+V_STOPPING = 4.0        # m/s: lead slower than this
+A_STOPPING = 0.5        # m/s^2: and braking at least this (also the floor for its stop distance once latched)
+S_STOPPING = 6.0        # m: and it will stop within this distance
+V_EGO_STOPPING = 25.0 / 3.6  # m/s: below this ego speed
+A_LEAD_GO = 0.3         # m/s^2: a latched lead that accelerates this much is moving again
+
+
+def _stop_point(lead, latched):
+  """the distance at which a slow lead braking to a stop will stand still, or None"""
+  a = -float(getattr(lead, 'aLeadK', 0.0))
+  if latched:
+    if lead.vLead >= V_STOPPING + 1.0 or a <= -A_LEAD_GO:
+      return None
+    a = max(a, A_STOPPING)
+  elif lead.vLead >= V_STOPPING or a < A_STOPPING:
+    return None
+  s = lead.vLead ** 2 / (2.0 * a)
+  if not latched and s > S_STOPPING:
+    return None
+  return lead.dRel + s
+
+
+class _Lead:
+  def __init__(self, status, d_rel, v_lead):
+    self.status, self.dRel, self.vLead = status, d_rel, v_lead
 
 
 def _need(v_ego, d_rel):
@@ -84,6 +123,8 @@ class StopApproach:
     self.wait_a = WAIT_ACCEL  # experimental WAIT lift (follows the car's real decel)
     self.lead_moving = False  # the lead was tracked moving the frame before
     self.moved = False        # this approach started from a lead that slowed to a stop (K_NEED, not K_STOPPED)
+    self.stopping = False     # the lead is a slow lead braking to a stop close ahead (aimed at its stop point)
+    self.via_stopping = False  # this approach started from such a lead (its stop point is already a prediction: K_STOPPED)
 
   def _step(self, target, up, down):
     """move self.a toward target: up = easing rate (toward 0/positive), down = firming rate"""
@@ -91,6 +132,17 @@ class StopApproach:
     return self.a
 
   def update(self, v_ego, lead, a_mpc, off, exp=False, a_ego=None):
+    if not off and lead is not None and bool(lead.status) and lead.vLead >= LEAD_STOPPED_V and v_ego < V_EGO_STOPPING:
+      d_stop = _stop_point(lead, self.stopping)
+    else:
+      d_stop = None
+    if d_stop is not None:
+      lead = _Lead(lead.status, d_stop, 0.0)
+    if d_stop is not None and not self.stopping and self.phase in (None, 'handback'):
+      self.via_stopping = True
+    elif d_stop is None and lead is not None and lead.vLead >= LEAD_STOPPED_V:
+      self.via_stopping = False
+    self.stopping = d_stop is not None
     stopped_lead = (not off and lead is not None and bool(lead.status) and lead.vLead < LEAD_STOPPED_V
                     and 0.0 < lead.dRel < MAX_DIST and v_ego > 0.3)
     was_moving = self.lead_moving

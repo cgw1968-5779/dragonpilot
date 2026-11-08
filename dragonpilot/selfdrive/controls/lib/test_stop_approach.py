@@ -1,3 +1,4 @@
+import pytest
 from types import SimpleNamespace as N
 
 import numpy as np
@@ -189,3 +190,26 @@ def test_lead_that_stops_while_braking_keeps_the_brake():
   sa = StopApproach(DT)
   sa.update(15 / 3.6, lead(14.2), -1.07, False)
   assert sa.phase == 'wait'
+
+
+
+def test_slow_lead_braking_to_a_stop_aims_at_its_stop_point():
+  # 13:05 route 000000fa: 9.5 km/h, lead 5.0 m ahead at 6.8 km/h braking -1.76 -> it stands ~1.0 m further
+  from types import SimpleNamespace as N2
+  from dragonpilot.selfdrive.controls.lib import stop_approach as SA2
+  sa = SA2.StopApproach(0.05)
+  ld = N2(status=True, dRel=5.0, vLead=6.8 / 3.6, aLeadK=-1.76)
+  sa.update(9.5 / 3.6, N2(status=True, dRel=5.3, vLead=7.5 / 3.6, aLeadK=-0.1), -1.5, False)   # tracked moving before
+  out = [sa.update(9.5 / 3.6, ld, -2.06, False) for _ in range(10)][-1]
+  need = (9.5 / 3.6) ** 2 / (2 * (5.0 + (6.8 / 3.6) ** 2 / (2 * 1.76) - SA2.STOP_GAP))
+  assert sa.stopping and out > -2.06                       # lighter than the MPC's 6 m aim
+  assert out == pytest.approx(-SA2.K_NEED * need, abs=0.05)
+
+
+def test_slow_lead_not_braking_stays_with_mpc():
+  from types import SimpleNamespace as N2
+  from dragonpilot.selfdrive.controls.lib import stop_approach as SA2
+  sa = SA2.StopApproach(0.05)
+  ld = N2(status=True, dRel=8.0, vLead=10 / 3.6, aLeadK=-0.1)
+  assert sa.update(12 / 3.6, ld, -0.4, False) == -0.4
+  assert not sa.stopping
