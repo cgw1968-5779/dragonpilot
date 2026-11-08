@@ -88,6 +88,7 @@ V_STOPPING = 4.0        # m/s: lead slower than this
 A_STOPPING = 0.5        # m/s^2: and braking at least this (also the floor for its stop distance once latched)
 S_STOPPING = 6.0        # m: and it will stop within this distance
 V_EGO_STOPPING = 25.0 / 3.6  # m/s: below this ego speed
+A_KEEP = 0.3            # m/s^2: a latched lead now braking less than this is not stopping (00000103 16:13:25)
 A_LEAD_GO = 0.3         # m/s^2: a latched lead that accelerates this much is moving again
 
 
@@ -95,7 +96,7 @@ def _stop_point(lead, latched):
   """the distance at which a slow lead braking to a stop will stand still, or None"""
   a = -float(getattr(lead, 'aLeadK', 0.0))
   if latched:
-    if lead.vLead >= V_STOPPING + 1.0 or a <= -A_LEAD_GO:
+    if lead.vLead >= V_STOPPING + 1.0 or a <= -A_LEAD_GO or a < A_KEEP:
       return None
     a = max(a, A_STOPPING)
   elif lead.vLead >= V_STOPPING or a < A_STOPPING:

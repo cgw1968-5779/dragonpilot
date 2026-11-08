@@ -213,3 +213,20 @@ def test_slow_lead_not_braking_stays_with_mpc():
   ld = N2(status=True, dRel=8.0, vLead=10 / 3.6, aLeadK=-0.1)
   assert sa.update(12 / 3.6, ld, -0.4, False) == -0.4
   assert not sa.stopping
+
+
+def test_latched_slow_lead_that_stops_braking_hands_back():
+  # 00000103 16:13:24.2: 5.6 km/h, lead 7.5 m at 9.7 km/h braking -0.69 -> latched; by 16:13:25.5 it brakes only
+  # -0.22 and keeps rolling at 8-9 km/h -> no longer a stop point, back to the MPC (smoothly)
+  from types import SimpleNamespace as N2
+  from dragonpilot.selfdrive.controls.lib import stop_approach as SA2
+  sa = SA2.StopApproach(0.05)
+  sa.update(6.2 / 3.6, N2(status=True, dRel=7.3, vLead=10.1 / 3.6, aLeadK=-0.58), -0.55, False)
+  sa.update(5.6 / 3.6, N2(status=True, dRel=7.5, vLead=9.7 / 3.6, aLeadK=-0.69), -0.50, False)
+  assert sa.stopping
+  sa.update(4.6 / 3.6, N2(status=True, dRel=8.4, vLead=9.3 / 3.6, aLeadK=-0.35), -0.10, False)
+  assert sa.stopping                                       # still braking >= A_KEEP: kept
+  outs = [sa.update(4.1 / 3.6, N2(status=True, dRel=9.1, vLead=8.9 / 3.6, aLeadK=-0.22), 0.2, False) for _ in range(20)]
+  assert not sa.stopping
+  assert outs[-1] == 0.2                                   # back to the MPC
+  assert np.max(np.diff(outs)) <= SA2.J_HANDBACK * 0.05 + 1e-9
