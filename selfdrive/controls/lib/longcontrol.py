@@ -66,6 +66,25 @@ ENGAGE_ONSET_J_STOCK = 4.0  # m/s^3 after it (stock carcontroller wind-down limi
 # slower is untouched.
 BRAKE_ONSET_FROM = -0.1      # m/s^2: "not braking" is a command at or above this
 BRAKE_ONSET_COAST_T = 0.5    # s not braking before a new onset
+# dppb (owner 2026-11-08, route 00000198 12:34:20 bookmark: a car cut in 28 m ahead at ~42 km/h, us 50 km/h; "too heavy -
+# it should be the same: soft first, then firmer only as the situation needs"). The 0.2 s soft part was too short to be
+# felt: the stock 4 m/s^3 climb after it SENT -0.93 at 0.4 s, the Altis did nothing for ~0.4 s and then bit, -0.38 ->
+# -2.00 in 0.3 s while sending -1.22 (planner -1.39). dppb rlogs 11-04..11-08, 55 brake onsets at 25-75 km/h after
+# >= 0.5 s without braking: sent at 0.5 s -0.4..0 -> the car braked a median 0.11 more than sent (delivered jerk 1.5
+# m/s^3), -0.7..-0.4 -> 0.14 (2.2), firmer than -0.7 -> 0.56-0.67 (3.7-4.4): a fast climb is what makes the Altis bite.
+# So after the soft part the climb follows what the lead actually needs, from radarState now (dynamic, no table):
+#   need = max(-aLeadK, 0) + max(vEgo - vLead, 0)^2 / (2 * (dRel - ONSET_S0 - vEgo * ONSET_LAG))
+# climb jerk = (need - current brake) / ONSET_T_CATCH, at least ONSET_J_SLOW, at most the stock ENGAGE_ONSET_J_STOCK:
+# already braking as much as needed -> 1.0 m/s^3 on to the planner's request (it is still reached); braking less than
+# needed -> catch up within ONSET_T_CATCH; no radar lead, or within ONSET_S0 + the lag travel -> the stock climb.
+# Replay: 12:34:20 sent at 0.5 s -0.70 instead of -1.07, planner's -1.37 reached at 1.2 s instead of ~0.6 s; over the 11
+# dppb drives only 11-04 21:53:34 (the 11-05 cut-in) changes (at most 0.42 lighter for 1.1 s, same peak); no normal stop
+# changes (their planner builds slower than 1 m/s^3). Extends the owner's 11-05 cut-in exception (lighter than the
+# planner only during the onset climb, never firmer).
+ONSET_J_SLOW = 1.0           # m/s^3
+ONSET_T_CATCH = 0.5          # s
+ONSET_S0 = 4.0               # m: the owner's standard gap
+ONSET_LAG = 0.5              # s of travel before a firmer command takes effect
 ENGAGE_HOLD_MAX_T = 15.0    # s after the onset
 ENGAGE_HOLD_LEAD_V = 1.0    # m/s: lead counted as stopped below this
 ENGAGE_HOLD_LEAD_T = 0.5    # s the lead must have been stopped
@@ -342,12 +361,25 @@ class LongControl:
       self.bo_t, self.bo_ramp = 0.0, min(self.last_output_accel, 0.0)
     t = self.bo_t
     self.bo_t += DT_CTRL
-    jerk = ENGAGE_ONSET_J0 + (ENGAGE_ONSET_J1 - ENGAGE_ONSET_J0) * t / ENGAGE_ONSET_T if t < ENGAGE_ONSET_T else ENGAGE_ONSET_J_STOCK
+    if t < ENGAGE_ONSET_T:
+      jerk = ENGAGE_ONSET_J0 + (ENGAGE_ONSET_J1 - ENGAGE_ONSET_J0) * t / ENGAGE_ONSET_T
+    else:
+      jerk = float(np.clip((self._onset_need(CS) + min(self.bo_ramp, 0.0)) / ONSET_T_CATCH, ONSET_J_SLOW, ENGAGE_ONSET_J_STOCK))
     self.bo_ramp -= jerk * DT_CTRL
     if output_accel < self.bo_ramp:
       return self.bo_ramp
     self.bo_t, self.coast_t = None, 0.0  # the planner's request is reached
     return output_accel
+
+  def _onset_need(self, CS) -> float:
+    """decel (m/s^2, >= 0) the radar lead needs now; inf = unknown / too close (stock climb)"""
+    lead = self.lead
+    if lead is None or not lead.status:
+      return float('inf')
+    room = lead.dRel - ONSET_S0 - CS.vEgo * ONSET_LAG
+    if room <= 0.5:
+      return float('inf')
+    return max(-float(getattr(lead, 'aLeadK', 0.0)), 0.0) + max(CS.vEgo - lead.vLead, 0.0) ** 2 / (2.0 * room)
 
   def engage_hold(self, output_accel, CS):
     lead = self.lead

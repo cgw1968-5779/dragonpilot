@@ -141,15 +141,35 @@ def run_drive(plan, frames=300, v=15.0, lead=None):
   return outs
 
 
-def test_cut_in_soft_start_then_quick_climb():
-  lead = SimpleNamespace(status=True, dRel=19.0, vLead=13.3, aLeadK=0.0)  # 21:53:33: 48 km/h car 19 m ahead
+def test_cut_in_soft_start_then_climb_by_need():
+  # 21:53:33: 48 km/h car 19 m ahead, us 54 km/h: needs ~0.2 m/s^2 -> after the soft part 1.0 m/s^3 on to the planner
+  lead = SimpleNamespace(status=True, dRel=19.0, vLead=13.3, aLeadK=0.0)
   outs = run_drive(lambda k: -2.0, lead=lead)
   first = next(k for k, o in enumerate(outs) if o < 0.0)
   assert outs[first + 9] > -0.16                         # -0.15 at 0.1 s
   assert -0.45 < outs[first + 19] < -0.35                # -0.40 at 0.2 s
-  assert -1.65 < outs[first + 49] < -1.55                # then 4 m/s^3: -1.6 at 0.5 s
-  assert outs[first + 70] == -2.0                        # the planner's force
+  assert -0.75 < outs[first + 49] < -0.65                # then 1.0 m/s^3: -0.70 at 0.5 s (stock -1.6)
+  assert outs[first + 200] == -2.0                       # the planner's force is still reached
+  steps = [a - b for a, b in zip(outs[first:first + 200], outs[first + 1:first + 201], strict=False)]
+  assert max(steps) <= lc.ENGAGE_ONSET_J_STOCK * DT_CTRL + 1e-9
   assert all(o >= -2.0 - 1e-9 for o in outs)             # never firmer than the planner
+
+
+def test_cut_in_climbs_as_fast_as_needed():
+  # a slower car close ahead (needs ~2 m/s^2): the stock climb, -1.6 at 0.5 s
+  lead = SimpleNamespace(status=True, dRel=16.0, vLead=9.0, aLeadK=0.0)
+  outs = run_drive(lambda k: -2.0, lead=lead)
+  first = next(k for k, o in enumerate(outs) if o < 0.0)
+  assert -1.65 < outs[first + 49] < -1.55
+  # the lead braking hard counts too
+  lead = SimpleNamespace(status=True, dRel=40.0, vLead=15.0, aLeadK=-2.5)
+  outs = run_drive(lambda k: -2.0, lead=lead)
+  first = next(k for k, o in enumerate(outs) if o < 0.0)
+  assert outs[first + 49] < -1.2
+  # no radar lead: the stock climb as before
+  outs = run_drive(lambda k: -2.0)
+  first = next(k for k, o in enumerate(outs) if o < 0.0)
+  assert -1.65 < outs[first + 49] < -1.55
 
 
 def test_gradual_planner_untouched():
