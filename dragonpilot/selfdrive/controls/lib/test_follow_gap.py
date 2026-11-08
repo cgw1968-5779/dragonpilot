@@ -33,10 +33,15 @@ def test_opening_already_or_far_enough_needs_nothing():
 def test_from_40_kmh_up():
   fg = G.FollowGap(DT)
   assert fg.update(30 * KPH, lead(10.0, 30), 0.3, False) == 0.3            # below 35 km/h: untouched
-  for v in (70.0, 100.0):                                                   # highway too (owner: 40 km/h and above)
+  fg = G.FollowGap(DT)
+  outs = [fg.update(60 * KPH, lead(1.6 * 60 * KPH + 6, 60), 0.2, False) for _ in range(40)]
+  assert outs[0] <= 0.0 and min(outs) < -0.2                               # 60 km/h still full
+  fg = G.FollowGap(DT)
+  outs = [fg.update(65 * KPH, lead(1.6 * 65 * KPH + 6, 65), 0.2, False) for _ in range(40)]
+  assert -0.2 < min(outs) < 0.0                                             # 65 km/h half
+  for v in (70.0, 100.0):                                                   # 70 km/h and up: zero (owner 13:30)
     fg = G.FollowGap(DT)
-    outs = [fg.update(v * KPH, lead(1.6 * v * KPH + 6, v), 0.2, False) for _ in range(40)]
-    assert outs[0] <= 0.0 and min(outs) < -0.2
+    assert all(fg.update(v * KPH, lead(1.6 * v * KPH + 6, v), 0.2, False) == 0.2 for _ in range(40))
   fg = G.FollowGap(DT)
   assert fg.update(58 * KPH, lead(30.0, 0.0), 0.3, False) == 0.3           # stopped lead: not this module
 
@@ -47,11 +52,12 @@ def test_plan_firmer_wins_and_disengaged_untouched():
   assert G.FollowGap(DT).update(50 * KPH, lead(20.0, 50), 0.4, True) == 0.4
 
 
-def test_highway_small_shortfall_no_full_brake():
-  # 13:12:52: 98 km/h, 65.7 m (wanted 65.9), lead 95.7 km/h -> a light brake, not the full A_MAX
+def test_small_shortfall_no_full_brake():
+  # 13:12:52 scaled to 58 km/h: 2 % short, lead 2.3 km/h slower -> a light brake, not the full A_MAX
   fg = G.FollowGap(DT)
-  outs = [fg.update(98 * KPH, lead(65.7, 95.7), 0.2, False) for _ in range(60)]
-  assert -0.15 < min(outs) <= 0.0
+  v = 58 * KPH; d = (G.HW_MIN * v + G.STOP_DISTANCE) * 0.98
+  outs = [fg.update(v, lead(d, 55.7), 0.2, False) for _ in range(60)]
+  assert -0.2 < min(outs) <= 0.0
 
 
 def test_gap_opening_eases_brake_at_once():
@@ -65,9 +71,9 @@ def test_gap_opening_eases_brake_at_once():
   assert np.max(np.diff(outs)) <= G.J_OFF * DT + 1e-9                         # smoothly
 
 
-def test_highway_gas_follows_lead_gently_near_gap():
+def test_gas_follows_lead_gently_near_gap():
   # at the wanted gap with the lead 3 km/h faster: some gas, not the full cruise gas
   fg = G.FollowGap(DT)
-  v = 95 * KPH; d = G.HW_MIN * v + G.STOP_DISTANCE + 1.0
-  out = fg.update(v, lead(d, 98), 0.3, False)
+  v = 55 * KPH; d = G.HW_MIN * v + G.STOP_DISTANCE + 1.0
+  out = fg.update(v, lead(d, 58), 0.3, False)
   assert 0.0 < out < 0.3
