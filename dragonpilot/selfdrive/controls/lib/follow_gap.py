@@ -40,10 +40,10 @@ import numpy as np
 
 HW_MIN = 2.2            # s
 STOP_DISTANCE = 6.0     # m (as the MPC)
-# m/s: 40-60 km/h full, faded in over 35-40 and out over 60-70 km/h (owner 2026-11-08 13:30 after highway drives
-# 60-79 m behind the lead: "the added 2.2 s must be zero by 70 km/h, interpolated in between"; was 40 km/h and up)
-V_BP = [35.0 / 3.6, 40.0 / 3.6, 60.0 / 3.6, 70.0 / 3.6]
-V_W = [0.0, 1.0, 1.0, 0.0]
+# m/s: full at 40 km/h (faded in over 35-40), linearly out to zero at 55 km/h (owner 2026-11-08 ~14:30: "the added
+# 2.2 s from 40 km/h must reach zero at 55 km/h"; 13:30 it was full 40-60 and zero at 70; before that 40 km/h and up)
+V_BP = [35.0 / 3.6, 40.0 / 3.6, 55.0 / 3.6]
+V_W = [0.0, 1.0, 0.0]
 LEAD_MOVING_V = 3.0     # m/s
 T_OPEN = 8.0            # s: open the shortfall over about this long
 DV_OPEN_MAX = 1.0       # m/s
