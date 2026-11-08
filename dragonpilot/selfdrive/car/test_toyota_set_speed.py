@@ -16,6 +16,8 @@ ButtonType = car.CarState.ButtonEvent.Type
 
 PCM_KPH = 60.      # the Altis PCM's own set speed after a SET (11-05 route: 60 -> 65 on the dash)
 PCM_DIAL_KPH = 65. # what the cluster shows for it (UI_SET_SPEED)
+PCM_REPEAT_FIRST = 45  # frames: the Altis PCM's second step while a button is held (route 19c: 2 steps in a 0.5 s press)
+PCM_REPEAT = 35        # frames between its further steps (route 190: 65 -> 30 in 1.3 s)
 
 
 def cross_cp(**kw):
@@ -40,6 +42,8 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.pcm_dial_kph = PCM_DIAL_KPH
     self.engaged = True
     self.v_ego_kph = 60.
+    self.held = None  # button the simulated PCM sees held
+    self.held_frames = 0
 
   def cs(self, events=()):
     CS = car.CarState.new_message()
@@ -52,9 +56,35 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     CS.buttonEvents = [ButtonEvent.new_message(type=t, pressed=p) for t, p in events]
     return CS
 
+  def pcm_step(self, button):
+    # the Altis PCM: 5 km/h on its dash per step, 30 minimum (pcm = dial line 11-05)
+    d = 5. if button == ButtonType.accelCruise else -5.
+    self.pcm_dial_kph = max(30., self.pcm_dial_kph + d)
+    self.pcm_kph = round(toyota_canonical_from_dial(self.pcm_dial_kph))
+
+  def pcm_sim(self, enabled, events):
+    # simulated Altis PCM (route 190 / 19c): steps once on the press, then again every ~0.35 s while held
+    for t, p in events:
+      if t not in (ButtonType.accelCruise, ButtonType.decelCruise):
+        continue
+      if p:
+        self.held, self.held_frames = t, 0
+        if enabled and self.engaged:
+          self.pcm_step(t)
+      elif self.held == t:
+        self.held = None
+    if self.held is not None and not events:
+      self.held_frames += 1
+      if enabled and self.engaged and self.held_frames >= PCM_REPEAT_FIRST and \
+         (self.held_frames - PCM_REPEAT_FIRST) % PCM_REPEAT == 0:
+        self.pcm_step(self.held)
+
   def step(self, enabled=True, events=(), n=1):
     for _ in range(n):
+      self.pcm_sim(enabled, events)
       self.helper.update_v_cruise(self.cs(events), enabled, is_metric=True)
+      if enabled and self.engaged and 0 < self.helper.v_cruise_cluster_kph < 250 and self.helper.v_cruise_kph > 0:
+        self.assertEqual(self.helper.v_cruise_cluster_kph, self.pcm_dial_kph)  # C3X == dash, every frame
       events = ()
 
   def engage_with_set(self):
@@ -136,25 +166,27 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.step(n=frames)
     self.step(events=[(button, False)])
 
-  def test_long_press_minus_jumps_to_30_and_stops(self):
-    # owner 2026-11-07: from 40-130 a long - goes straight to 30 and stays there however long it is held
+  def test_long_press_minus_follows_the_pcm_down_to_30(self):
+    # owner 2026-11-08: the C3X shows the dash's number at every moment (step() checks it every frame); a long - simply
+    # rides the PCM down to its 30, then one short - goes to the stop target 0
     for pcm, dial in ((63., 68.), (120., 127.), (36., 40.)):
       self.setUp()
       self.pcm_kph, self.pcm_dial_kph = pcm, dial
       self.engage_with_set()
-      start = self.helper.v_cruise_cluster_kph
-      L = TOYOTA_VIRTUAL_CRUISE_LONG_PRESS
-      self.step(events=[(ButtonType.decelCruise, True)])
-      self.step(n=L - 5)
-      self.assertEqual(self.helper.v_cruise_cluster_kph, start)  # nothing before 1 s
-      self.step(n=10)
+      self.long_press(ButtonType.decelCruise, frames=40 * PCM_REPEAT)
       self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
-      self.step(n=5 * L)  # still held: stays 30
-      self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
-      self.step(events=[(ButtonType.decelCruise, False)])  # the release adds nothing
-      self.assertEqual(self.helper.v_cruise_cluster_kph, 30.)
-      self.tap(ButtonType.decelCruise, hold_frames=3)  # then one short - : 0
+      self.tap(ButtonType.decelCruise, hold_frames=3)
       self.assertEqual(self.helper.v_cruise_kph, 0.)
+
+  def test_half_second_press_that_steps_the_pcm_twice(self):
+    # route 19c (dppb fc084b1f) 11:48: a ~0.5 s - press moved the dash 110 -> 100 but the C3X only 110 -> 105
+    self.pcm_kph, self.pcm_dial_kph = 103., 110.
+    self.engage_with_set()
+    self.tap(ButtonType.decelCruise, hold_frames=50)
+    self.assertEqual(self.pcm_dial_kph, 100.)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 100.)
+    self.tap(ButtonType.accelCruise, hold_frames=50)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 110.)
 
   def test_long_press_minus_at_30_or_35(self):
     # 30-40 unchanged: 35 -> 30; at 30 a long press does nothing (0 only with a short press); at 0 stays 0
@@ -201,7 +233,7 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.v_ego_kph, self.standstill = 0., True
     self.tap(ButtonType.accelCruise)
     self.assertEqual(self.helper.v_cruise_kph, round(pcm_ceiling_base_kph(self.cs(), True), 1))
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 65.)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, self.pcm_dial_kph)
 
   def test_cancel_at_zero_then_res_returns_to_the_ceiling(self):
     self.engage_with_set()
@@ -227,24 +259,19 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
         self.pcm_dial_kph += 5
       self.step()
     self.step(events=[(ButtonType.accelCruise, False)])
-    self.assertEqual(self.pcm_dial_kph, 85.)  # four PCM steps while held
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 85.)
+    self.assertGreaterEqual(self.pcm_dial_kph, 85.)  # it climbed while held
+    self.assertEqual(self.helper.v_cruise_cluster_kph, self.pcm_dial_kph)
 
-  def test_target_capped_at_pcm_plus_headroom(self):
+  def test_short_presses_land_on_the_dash_number(self):
     self.engage_with_set()
     for _ in range(6):
       self.tap(ButtonType.accelCruise)
-    # ceiling base = the PCM number on the Altis dial line: dial 65 -> 60.0
-    self.assertAlmostEqual(pcm_ceiling_base_kph(self.cs(), True), (65. - 3.24) / 1.029, places=3)
-    cap = round(round(pcm_ceiling_base_kph(self.cs(), True), 1) + TOYOTA_PCM_SET_SPEED_HEADROOM_KPH, 1)
-    self.assertEqual(self.helper.v_cruise_kph, cap)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, toyota_dial_from_canonical(cap))
-    self.pcm_kph, self.pcm_dial_kph = 120., 128.
-    self.tap(ButtonType.accelCruise)
-    self.assertGreater(self.helper.v_cruise_kph, cap)
-    self.assertEqual(self.helper.v_cruise_cluster_kph % 5, 0)
+    self.assertEqual(self.pcm_dial_kph, 95.)
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 95.)
+    self.assertAlmostEqual(self.helper.v_cruise_kph, pcm_ceiling_base_kph(self.cs(), True), delta=0.15)
+    self.assertLessEqual(self.helper.v_cruise_kph, pcm_ceiling_base_kph(self.cs(), True) + TOYOTA_PCM_SET_SPEED_HEADROOM_KPH)
 
-  def test_cancel_then_res_keeps_the_target(self):
+  def test_cancel_then_res_takes_the_dash_number(self):
     self.engage_with_set()
     self.tap(ButtonType.decelCruise)
     self.tap(ButtonType.decelCruise)
@@ -253,14 +280,14 @@ class TestToyotaSoftwareCruise(unittest.TestCase):
     self.engaged = False
     self.pcm_kph, self.pcm_dial_kph = 120., 128.
     self.step(enabled=False, n=20)
-    self.assertEqual(self.helper.v_cruise_kph, target)
+    self.assertEqual(self.helper.v_cruise_kph, target)  # held while cancelled
     self.step(enabled=False, events=[(ButtonType.accelCruise, True)])
     self.engaged = True
     self.step(enabled=False, events=[(ButtonType.accelCruise, False)])
     self.step(enabled=False, n=5)
     self.step(enabled=True, n=5)
-    self.assertEqual(self.helper.v_cruise_kph, target)
-    self.assertEqual(self.helper.v_cruise_cluster_kph, 55.)
+    self.assertNotEqual(self.helper.v_cruise_kph, target)  # dppb 11-08: RES takes the dash's number
+    self.assertEqual(self.helper.v_cruise_cluster_kph, 128.)
 
   def test_cancel_then_set_mirrors_the_pcm(self):
     self.engage_with_set()
