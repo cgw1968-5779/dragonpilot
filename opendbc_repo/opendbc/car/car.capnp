@@ -206,6 +206,8 @@ struct CarState {
   lowSpeedAlert @56 :Bool;  # lost steering control due to a dynamic min steering speed
   blockPcmEnable @60 :Bool;  # whether to allow PCM to enable this frame
   driveMode @61 :Int8 = -1;  # dragonpilot: drive mode switch, -1 unknown/not read, 0 eco, 1 normal, 2 sport
+  engineOff @62 :Bool;  # dragonpilot: Toyota hybrid, engine stopped (ENGINE_RPM 0x1C4)
+  hvSoc @63 :Float32 = -1;  # dragonpilot: Toyota hybrid battery state of charge % (HYBRID_BATTERY 0x380), -1 unknown
 
   # cruise state
   cruiseState @10 :CruiseState;

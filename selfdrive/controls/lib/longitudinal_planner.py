@@ -17,7 +17,7 @@ from openpilot.common.swaglog import cloudlog
 from dragonpilot.selfdrive.controls.lib.acm import ACM
 from dragonpilot.selfdrive.controls.lib.aem import AEM
 from dragonpilot.selfdrive.controls.lib.apm import APM
-from dragonpilot.selfdrive.controls.lib.drive_mode import drive_mode_max_accel
+from dragonpilot.selfdrive.controls.lib.eco_ev import EcoEv
 from dragonpilot.selfdrive.controls.lib.cruise_decel import CruiseDecel
 from dragonpilot.selfdrive.controls.lib.exp_stop_line import ExpStopLine
 
@@ -80,6 +80,7 @@ class LongitudinalPlanner:
     self.apm = APM()
     self.cruise_decel = CruiseDecel()  # dragonpilot hook
     self.exp_stop_line = ExpStopLine(self.dt)  # dragonpilot hook
+    self.eco_ev = EcoEv(self.dt)  # dragonpilot hook
 
   @staticmethod
   def parse_model(model_msg):
@@ -123,7 +124,7 @@ class LongitudinalPlanner:
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
-    accel_clip = [ACCEL_MIN, drive_mode_max_accel(v_ego, sm['carState'].driveMode, get_max_accel(v_ego))]  # dragonpilot hook
+    accel_clip = [ACCEL_MIN, self.eco_ev.max_accel(sm, get_max_accel(v_ego))]  # dragonpilot hook
     steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
     accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
 
