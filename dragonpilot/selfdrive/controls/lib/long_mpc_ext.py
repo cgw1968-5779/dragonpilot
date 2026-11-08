@@ -208,3 +208,16 @@ class LongMpcExt:
     x_stop = float(lead_xv_0[0, 0]) + v_lead ** 2 / (2.0 * max(-a_lead, CAP_LEAD_A_MIN))  # where the lead itself stops
     self.update_onset_cap(x_stop if v_lead > 0.0 else x_obstacle_raw, v_plan, t1, t_idxs, float(v_plan[0]) - v_lead, dyn)
     return out
+
+
+# Aggressive following gap at highway speed (owner 2026-11-08: "standard's gap above 90 km/h suits the aggressive mode
+# better - let aggressive grow its gap smoothly over 80-100 km/h and reach standard's at 100"; owner-approved exception
+# to "do not change T_FOLLOW", aggressive only). Below 80 km/h and every other personality: unchanged.
+AGGR_T_V_BP = [80.0 / 3.6, 100.0 / 3.6]
+AGGR_T_V = [1.25, 1.45]   # aggressive -> standard
+
+
+def aggressive_t_follow(t_follow: float, personality, v_ego: float) -> float:
+  if personality != log.LongitudinalPersonality.aggressive:
+    return t_follow
+  return max(t_follow, float(np.interp(v_ego, AGGR_T_V_BP, AGGR_T_V)))

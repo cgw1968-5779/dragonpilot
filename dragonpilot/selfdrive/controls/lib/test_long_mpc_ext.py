@@ -61,3 +61,14 @@ def test_lead_decel_trust():
   assert lead_decel_trust(-3.2, 32 * kph) == -3.2                     # a hard brake is never discounted
   assert -3.0 < lead_decel_trust(-2.5, 32 * kph) < -2.5 * 0.5         # fades back in between
   assert lead_decel_trust(0.8, 32 * kph) == 0.8                       # acceleration untouched
+
+
+def test_aggressive_t_follow_grows_80_to_100_kmh():
+  from cereal import log
+  from dragonpilot.selfdrive.controls.lib.long_mpc_ext import aggressive_t_follow
+  P = log.LongitudinalPersonality
+  f = lambda kph, p=P.aggressive: aggressive_t_follow({P.aggressive: 1.25, P.standard: 1.45, P.relaxed: 1.75}[p], p, kph / 3.6)
+  assert f(50) == 1.25 and f(80) == 1.25
+  assert abs(f(90) - 1.35) < 1e-9
+  assert abs(f(100) - 1.45) < 1e-9 and abs(f(120) - 1.45) < 1e-9
+  assert f(120, P.standard) == 1.45 and f(120, P.relaxed) == 1.75 and f(90, P.standard) == 1.45
