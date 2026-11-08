@@ -138,6 +138,12 @@ LINE_W_MAX = 0.85  # dpcr (owner 2026-11-05 "as strong as possible"): between tn
 # pursuit still available 100 % of fa frames >= 60 km/h (the fit needs xd further). Lookahead/gains/filter unchanged
 # (no added lag). First, minimal step; if it feels late or lags: back to 0.36 / tag dpcr-lat-good-20261105.
 LINE_PRED_T = 0.75          # s: measured command -> actual yaw delay (route fa; 0.36 from route e4 until 11-08)
+# dpcr (owner 2026-11-08 after 0.75 s: "it improved, try B too"): the pose after the delay comes from the commands
+# actually sent during the last LINE_PRED_T (they are still "in the pipe"), not from the arc of the last command:
+# heading psi_i = sum(k_j) v dt, lateral shift = sum(psi_i) v dt. A constant history gives the old arc exactly (and
+# the history starts filled with the current command). Noise closed-loop sim with the real class and the fa lag fit:
+# step overshoot 22.6 % -> 3.7 %, settle to 2 cm 10.5 -> 3.8 s, offset std -25 %, 5-10 s weave share 68 -> 41 %,
+# command jerk p95 0.22 -> 0.25.
 LINE_W_RISE = 0.5           # 1/s: 2 s to take over
 LINE_W_FALL = 2.0           # 1/s: 0.5 s to hand back
 LINE_FILTER_TAU = 0.1       # s; low-pass on the line curvature (0.3 oscillated in the closed-loop sim with 0.5 s steering lag)
@@ -160,6 +166,8 @@ class LaneCentering:
     self.line_valid = False
     self.output = 0.0  # what update() returned (correction blended with line mode)
     self.k_prev = 0.0  # last commanded curvature (model + output), for the delay prediction
+    self.k_hist: np.ndarray | None = None  # commanded curvature of the last LINE_PRED_T s (ring buffer)
+    self.k_i = 0  # next slot = the oldest command
     self.fit_key = None  # model frame the lane-centre fits below belong to
     self.fit_x = np.zeros(0)
     self.fit_centre = np.zeros(0)
@@ -197,10 +205,28 @@ class LaneCentering:
     self.line_w = 0.0
     self.line_valid = False
     self.output = 0.0
+    self.k_hist = None
+
+  def _push_command(self, k: float):
+    n = max(int(round(LINE_PRED_T / self.dt)), 1)
+    if self.k_hist is None or len(self.k_hist) != n:
+      self.k_hist = np.full(n, k, dtype=float)
+      self.k_i = 0
+    else:
+      self.k_hist[self.k_i] = k
+      self.k_i = (self.k_i + 1) % n
+
+  def predicted_pose(self, v_ego: float) -> tuple[float, float]:
+    """(lateral shift, heading) after LINE_PRED_T from the commands sent in the last LINE_PRED_T (positive = right)"""
+    if self.k_hist is None:
+      xd = v_ego * LINE_PRED_T
+      return self.k_prev * xd * xd / 2.0, self.k_prev * xd
+    psi = np.cumsum(np.roll(self.k_hist, -self.k_i)) * (v_ego * self.dt)
+    return float(np.sum(psi)) * v_ego * self.dt, float(psi[-1])
 
   def line_curvature(self, model_v2, v_ego: float) -> float | None:
     """Pure pursuit of the lane-line centre LINE_T_LOOK ahead (curvature, positive = right), from the pose LINE_PRED_T
-    ahead on the arc of the last command. None unless both near lines are confident and seen far enough; call only
+    ahead predicted from the commands sent in the last LINE_PRED_T. None unless both near lines are confident and seen far enough; call only
     after measure() accepted the pair (width checks)."""
     info = self._frame_info(model_v2)
     if info is None or info[0] < LINE_MIN_PROB:
@@ -213,9 +239,9 @@ class LaneCentering:
     _, fit = self.centre_fit(model_v2, xd + look + LINE_FIT_MARGIN)
     if fit is None:
       return None
-    k = self.k_prev
+    y_d, psi_d = self.predicted_pose(v_ego)
     x = xd + look
-    dy = float((fit[0] * x + fit[1]) * x + fit[2]) - k * xd * xd / 2.0 - k * xd * look
+    dy = float((fit[0] * x + fit[1]) * x + fit[2]) - y_d - psi_d * look
     return 2.0 * dy / (look ** 2 + dy ** 2)
 
   def _line_mode(self, model_v2, v_ego: float, meas_ok: bool, model_curvature: float | None, lane_changing: bool) -> float:
@@ -223,6 +249,7 @@ class LaneCentering:
     if model_curvature is None:
       return self.correction
     self.k_prev = model_curvature + self.output  # the last command: the arc the car is on through the delay
+    self._push_command(self.k_prev)
     k_line = self.line_curvature(model_v2, v_ego) if meas_ok and not lane_changing else None
     trusted = k_line is not None and abs(k_line - model_curvature) * v_ego ** 2 <= LINE_MAX_DIFF_ACCEL
     if trusted:

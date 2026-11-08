@@ -51,7 +51,7 @@ def test_takes_over_with_confident_lines_and_pursues_the_centre():
 def test_follows_the_lane_curvature_not_the_model():
   lc = LaneCentering(DT)
   v = 100 / 3.6
-  out = _run(lc, _model(curv=1 / 1000), v, 1 / 800, 3.0)  # model asks tighter than the lane
+  out = _run(lc, _model(curv=1 / 1000), v, 1 / 800, 4.0)  # model asks tighter than the lane (4 s: the command history settles)
   assert abs(out - (LINE_W_MAX * (1 / 1000 - 1 / 800) + (1 - LINE_W_MAX) * lc.correction)) < 2e-5
 
 
@@ -105,3 +105,29 @@ def test_centre_fits_made_once_per_model_frame(monkeypatch):
   assert len(calls) == 2  # the near fit (measure) and the line-mode fit, once each
   lc.update(_model(offset=0.1), 100 / 3.6, True, False, 0.0, 0.0, False)  # a new frame refits
   assert len(calls) == 4
+
+
+
+def test_constant_command_history_is_the_old_arc():
+  from dragonpilot.selfdrive.controls.lib.lane_centering import LINE_PRED_T as PT
+  lc = LaneCentering(DT)
+  v, k = 100 / 3.6, 1 / 900
+  for _ in range(200):
+    lc._push_command(k)
+  y, psi = lc.predicted_pose(v)
+  xd = v * PT
+  assert abs(psi - k * xd) < 1e-4 * k * xd + 1e-9
+  assert abs(y - k * xd * xd / 2) < 0.02 * k * xd * xd / 2
+
+
+def test_command_history_sees_a_correction_already_sent():
+  # the car was sent a right correction in the last 0.3 s: the pose after the delay is further right than the arc of
+  # the (now straight) last command says, so the pursuit asks less
+  lc = LaneCentering(DT)
+  v = 100 / 3.6
+  n = int(round(LINE_PRED_T / DT))
+  for i in range(n):
+    lc._push_command(2e-4 if i >= n - 30 else 0.0)
+  lc._push_command(0.0)
+  y, psi = lc.predicted_pose(v)
+  assert y > 0.0 and psi > 0.0
