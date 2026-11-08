@@ -15,10 +15,16 @@ Overshoot = command - filtered aEgo (the controller's own aEgo filter). It only 
 most MAX_RELIEF, and only while the car is ALREADY decelerating more than the planner asked (by > DEADBAND), so the
 delivered decel stays at least the planner's. Replay over 11 dppb drives: 7 events, max 0.16 (13:12 / 13:15 / 13:19
 / 13:24 0.10-0.16); normal stops 0-0.04.
+
+Owner 2026-11-08 after driving it: "20-15 a little lighter worked, almost perfect - try one more tiny step lighter".
+KP 0.4 -> 0.5 (deadband, window, cap and rate unchanged). Same replay: 13:12:43 0.16 -> 0.20 (the cap), 13:15:07 0.10 ->
+0.12, 13:19:32 0.11 -> 0.14, 13:24:42 0.12 -> 0.15, 13:26:13 0.08 -> 0.10; normal stops 11-05 09:22:55 / 11-08 08:32:50
+stay 0.04, the rest 0.01-0.06. relief = 0.5 x (overshoot - 0.3) is always smaller than the overshoot, so the car still
+decelerates at least as much as the planner asked.
 """
 import numpy as np
 
-KP = 0.4
+KP = 0.5           # 2026-11-08: was 0.4 (owner: one more tiny step lighter at 20-15 km/h)
 DEADBAND = 0.3      # m/s^2: overshoot below this is untouched (normal stops)
 CMD_MAX = -0.5      # m/s^2: only while the command brakes firmer than this
 MAX_RELIEF = 0.2    # m/s^2

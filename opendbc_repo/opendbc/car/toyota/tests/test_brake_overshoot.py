@@ -16,7 +16,8 @@ def test_no_relief_without_overshoot_or_outside_the_window():
 def test_small_relief_for_a_heavy_overshoot_rate_limited_and_capped():
   r = B.BrakeOvershootRelief(DT)
   out = [r.update(True, 18 / 3.6, -1.9, -2.5) for _ in range(100)]
-  assert abs(out[-1] - 0.4 * (0.6 - 0.3)) < 1e-6
+  assert abs(out[-1] - B.KP * (0.6 - 0.3)) < 1e-6
+  assert out[-1] < 0.6 - 0.3                                   # still at least the planner's decel
   assert max(abs(b - a) for a, b in zip([0.0] + out, out)) <= B.RATE * DT + 1e-9
   out = [r.update(True, 18 / 3.6, -2.0, -4.0) for _ in range(100)]
   assert out[-1] == B.MAX_RELIEF
