@@ -6,6 +6,7 @@ from opendbc.car.can_definitions import CanData
 from opendbc.car.carlog import carlog
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
+from opendbc.car.toyota.brake_overshoot import BrakeOvershootRelief
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
@@ -74,6 +75,7 @@ class CarController(CarControllerBase):
     # *** start long control state ***
     self.long_pid = get_long_tune(self.CP, self.params)
     self.aego = FirstOrderFilter(0.0, 0.25, DT_CTRL * 3)
+    self.overshoot_relief = BrakeOvershootRelief(DT_CTRL * 3)  # dragonpilot hook
     self.pitch = FirstOrderFilter(0, 0.5, DT_CTRL)
     self.pitch_hp = HighPassFilter(0.0, 0.25, 1.5, DT_CTRL)
 
@@ -259,8 +261,10 @@ class CarController(CarControllerBase):
                                                speed=CS.out.vEgo,
                                                feedforward=pcm_accel_cmd,
                                                freeze_integrator=actuators.longControlState != LongCtrlState.pid)
+          pcm_accel_cmd += self.overshoot_relief.update(not stopping, CS.out.vEgo, actuators.accel, self.aego.x)  # dragonpilot hook
         else:
           self.long_pid.reset()
+          self.overshoot_relief.relief = 0.0  # dragonpilot hook
 
         # Along with rate limiting positive jerk above, this greatly improves gas response time
         # Consider the net acceleration request that the PCM should be applying (pitch included)
