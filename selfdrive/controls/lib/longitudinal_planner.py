@@ -19,6 +19,7 @@ from dragonpilot.selfdrive.controls.lib.aem import AEM
 from dragonpilot.selfdrive.controls.lib.apm import APM
 from dragonpilot.selfdrive.controls.lib.drive_mode import drive_mode_max_accel
 from dragonpilot.selfdrive.controls.lib.cruise_decel import CruiseDecel
+from dragonpilot.selfdrive.controls.lib.exp_stop_line import ExpStopLine
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -78,6 +79,7 @@ class LongitudinalPlanner:
     self.aem = AEM()
     self.apm = APM()
     self.cruise_decel = CruiseDecel()  # dragonpilot hook
+    self.exp_stop_line = ExpStopLine(self.dt)  # dragonpilot hook
 
   @staticmethod
   def parse_model(model_msg):
@@ -151,7 +153,7 @@ class LongitudinalPlanner:
 
     self.mpc.set_weights(prev_accel_constraint, personality=personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(sm['radarState'], v_cruise, personality=personality)
+    self.mpc.update(self.exp_stop_line.radar_state(sm, v_ego), v_cruise, personality=personality)  # dragonpilot hook
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
