@@ -23,6 +23,7 @@ from dragonpilot.selfdrive.controls.lib.stop_approach import StopApproach
 from dragonpilot.selfdrive.controls.lib.exp_stop_line import ExpStopLine
 from dragonpilot.selfdrive.controls.lib.urgent_brake import UrgentBrake
 from dragonpilot.selfdrive.controls.lib.follow_gap import FollowGap
+from dragonpilot.selfdrive.controls.lib.launch_start import LaunchStart
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -87,6 +88,7 @@ class LongitudinalPlanner:
     self.exp_stop_line = ExpStopLine(self.dt)  # dragonpilot hook
     self.urgent_brake = UrgentBrake(self.dt)  # dragonpilot hook
     self.follow_gap = FollowGap(self.dt)  # dragonpilot hook
+    self.launch_start = LaunchStart(self.dt)  # dragonpilot hook
 
   @staticmethod
   def parse_model(model_msg):
@@ -206,6 +208,7 @@ class LongitudinalPlanner:
     # dragonpilot hook (dpcr 2026-11-06, tncr1 copy): tncr1's should_stop - the car's own speed below 0.3 m/s and the target
     # below 0.1 (drive_helpers.should_stop), not the plan's first speed below vEgoStopping (0.25); e2e's own flag kept
     self.output_should_stop = bool(v_ego < 0.3 and output_a_target < 0.1) or (mode == 'blended' and output_should_stop_e2e)
+    self.output_should_stop = self.launch_start.update(self.output_should_stop, v_ego, sm['radarState'].leadOne, output_a_target)  # dragonpilot hook
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
