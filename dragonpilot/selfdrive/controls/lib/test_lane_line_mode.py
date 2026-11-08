@@ -52,6 +52,16 @@ def test_follows_the_lane_curvature_not_the_model():
   lc = LaneCentering(DT)
   v = 100 / 3.6
   out = _run(lc, _model(curv=1 / 1000), v, 1 / 800, 4.0)  # model asks tighter than the lane (4 s: the command history settles)
+  # 100 km/h: the pursuit's curvature carries the outward fraction (owner 11-08 route ff)
+  from dragonpilot.selfdrive.controls.lib.lane_centering import LINE_OUT_FRAC_V
+  k_lane = (1 - LINE_OUT_FRAC_V[-1]) / 1000
+  assert abs(out - (LINE_W_MAX * (k_lane - 1 / 800) + (1 - LINE_W_MAX) * lc.correction)) < 2e-5
+
+
+def test_no_outward_fraction_at_or_below_85_kph():
+  lc = LaneCentering(DT)
+  v = 84 / 3.6
+  out = _run(lc, _model(curv=1 / 1000), v, 1 / 800, 4.0)
   assert abs(out - (LINE_W_MAX * (1 / 1000 - 1 / 800) + (1 - LINE_W_MAX) * lc.correction)) < 2e-5
 
 

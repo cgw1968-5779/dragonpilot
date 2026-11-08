@@ -144,6 +144,16 @@ LINE_PRED_T = 0.75          # s: measured command -> actual yaw delay (route fa;
 # the history starts filled with the current command). Noise closed-loop sim with the real class and the fa lag fit:
 # step overshoot 22.6 % -> 3.7 %, settle to 2 cm 10.5 -> 3.8 s, offset std -25 %, 5-10 s weave share 68 -> 41 %,
 # command jerk p95 0.22 -> 0.25.
+# dpcr (owner 2026-11-08, route 000000ff 14:35-14:36: "100-120 km/h curves still sit on the inside"): above 70 km/h
+# the line pursuit carries 0.85 of the command, so the curve outward FRAC (curve_bias.py, 0.155 at 90-120 km/h, on the
+# model's curvature only) is left with ~2 % (route ff 95-106 km/h curves: command / model 0.924). The pursuit's own
+# curvature gets an outward fraction too, LINE_OUT_FRAC_V over LINE_OUT_V_BP, faded in with the curve over
+# LINE_OUT_K_BP (no step at the straight / curve edge). Closed loop it settles outward of the lane centre by about
+# (1/(1-frac) - 1) k L^2 / 2: at 100 km/h (L 47 m) with 0.08: R 2000 m ~6 cm, R 1000 m ~12 cm, R 500 m ~25 cm.
+LINE_OUT_V_BP = [85.0 / 3.6, 100.0 / 3.6]  # m/s
+LINE_OUT_FRAC_V = [0.0, 0.08]
+LINE_OUT_K_BP = [1e-4, 3e-4]               # 1/m: |lane-centre curvature| (centre fit) over which the fraction fades in;
+                                           # not the pursuit's own curvature (it wiggles +-0.26e-3 on straights)
 LINE_W_RISE = 0.5           # 1/s: 2 s to take over
 LINE_W_FALL = 2.0           # 1/s: 0.5 s to hand back
 LINE_FILTER_TAU = 0.1       # s; low-pass on the line curvature (0.3 oscillated in the closed-loop sim with 0.5 s steering lag)
@@ -168,6 +178,7 @@ class LaneCentering:
     self.k_prev = 0.0  # last commanded curvature (model + output), for the delay prediction
     self.k_hist: np.ndarray | None = None  # commanded curvature of the last LINE_PRED_T s (ring buffer)
     self.k_i = 0  # next slot = the oldest command
+    self.lane_k = 0.0  # |lane-centre curvature| of the last line fit
     self.fit_key = None  # model frame the lane-centre fits below belong to
     self.fit_x = np.zeros(0)
     self.fit_centre = np.zeros(0)
@@ -239,6 +250,7 @@ class LaneCentering:
     _, fit = self.centre_fit(model_v2, xd + look + LINE_FIT_MARGIN)
     if fit is None:
       return None
+    self.lane_k = abs(2.0 * float(fit[0]))  # |curvature| of the lane centre ahead
     y_d, psi_d = self.predicted_pose(v_ego)
     x = xd + look
     dy = float((fit[0] * x + fit[1]) * x + fit[2]) - y_d - psi_d * look
@@ -251,6 +263,8 @@ class LaneCentering:
     self.k_prev = model_curvature + self.output  # the last command: the arc the car is on through the delay
     self._push_command(self.k_prev)
     k_line = self.line_curvature(model_v2, v_ego) if meas_ok and not lane_changing else None
+    if k_line is not None:
+      k_line *= 1.0 - float(np.interp(v_ego, LINE_OUT_V_BP, LINE_OUT_FRAC_V)) * float(np.interp(self.lane_k, LINE_OUT_K_BP, [0.0, 1.0]))
     trusted = k_line is not None and abs(k_line - model_curvature) * v_ego ** 2 <= LINE_MAX_DIFF_ACCEL
     if trusted:
       if not self.line_valid and self.line_w <= 0.0:
