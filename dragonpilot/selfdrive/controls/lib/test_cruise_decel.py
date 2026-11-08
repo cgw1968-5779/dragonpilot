@@ -53,15 +53,31 @@ def test_normal_latches_one_decel():
   assert d2 == max(d1, (55 - 58) * KPH / cd.TAPER_T)
 
 
-def test_set_zero_firmest_at_30_to_20_then_linear_to_the_end():
-  # owner 2026-11-05: set 0 from 35 km/h and up: firmest at 30 and 20 km/h, then easing linearly to the stop
+def test_set_zero_schedule_owner_1109():
+  # owner 2026-11-09: set 0 from ~70 km/h: -1.0 at 60 growing linearly to the firm hold at 30, held below 10, then the end
   c = cd.CruiseDecel()
-  d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (60, 45, 35, 30, 25, 20, 15, 10, 5)}
-  assert abs(d[30] - -0.50) < 1e-3 and abs(d[25] - -0.50) < 1e-3 and abs(d[20] - -0.50) < 1e-3
-  assert d[60] > d[45] > d[35] > d[30] - 1e-9
-  assert d[20] < d[15] < d[10] < d[5] < cd.ECO_DECEL_V[0] + 1e-9
-  assert abs((d[15] - d[10]) - (d[10] - d[5])) < 1e-9  # linear
-  assert min(d.values()) >= -0.50 - 1e-9
+  d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (70, 65, 60, 45, 30, 20, 10, 6, 3, 0.01)}
+  assert abs(d[70] - FLAT_COAST) < 1e-3                       # coasting at 70 as before
+  assert d[70] > d[65] > d[60] and abs(d[60] - -1.0) < 1e-9   # blends into -1.0 at 60
+  assert abs(d[45] - (-1.0 + 0.5 * (cd.SET0_DECEL_V[2] - -1.0))) < 1e-9  # linear 60 -> 30
+  assert d[30] == d[20] == d[10] == d[6] == cd.SET0_DECEL_V[1] >= -2.2
+  assert d[6] < d[3] < d[0.01] and abs(d[0.01] - -0.30) < 0.01  # linear end to the Altis -0.30
+  assert min(d.values()) >= -2.2
+
+
+def test_set_zero_profile_follows_the_schedule_from_a_smooth_onset():
+  c = cd.CruiseDecel()
+  assert c.update(cd.ECO, 50 * KPH, 0.0, FLAT_COAST, False) == 0.0 and c.profile is not None
+  t = np.array([0.0, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0])
+  v = c.profile(50 * KPH, 0.0, t)
+  assert abs(v[0] - 50 * KPH) < 1e-9 and np.all(np.diff(v) <= 1e-9) and v[-1] < 0.1  # stopped at ~8 s (last value: mean over 8-10 s)
+  # mean speed over 0-0.5 s with a 1 m/s^3 onset from 0: v0 - J t^2 / 6
+  assert abs(v[1] - (50 * KPH - cd.PROFILE_JERK * 0.25 / 6)) < 0.01
+  # a lowered (non-zero) set speed, a bypass or a set speed above: the stock MPC line (profile None)
+  for args in ((cd.ECO, 50 * KPH, 20 * KPH, FLAT_COAST, False), (cd.ECO, 50 * KPH, 0.0, FLAT_COAST, True),
+               (cd.ECO, 20 * KPH, 30 * KPH, FLAT_COAST, False)):
+    c.update(*args)
+    assert c.profile is None
 
 
 def test_low_target_uses_the_eco_line_in_every_mode():

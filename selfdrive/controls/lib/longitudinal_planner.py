@@ -145,6 +145,7 @@ class LongitudinalPlanner:
       accel_clip[1] = min(accel_clip[1], clipped_accel_coast_interp)
 
     v_cruise = self.cruise_decel.update(sm['carState'].driveMode, v_ego, v_cruise, accel_coast if accel_coast < 0.0 else None, force_slow_decel or reset_state or self.mpc.source != LongitudinalPlanSource.cruise)  # dragonpilot hook
+    self.mpc.cruise_profile = self.cruise_decel.profile  # dragonpilot hook
     if force_slow_decel:
       v_cruise = 0.0
 

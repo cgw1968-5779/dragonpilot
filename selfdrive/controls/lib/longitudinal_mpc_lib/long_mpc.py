@@ -241,6 +241,7 @@ class LongitudinalMpc:
     self.launch_t = 0.0
     self.launch_offset = 0.0
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
+    self.cruise_profile = None  # dragonpilot hook (cruise_decel: the owner's set-0 speed curve, None = stock)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
 
@@ -369,7 +370,7 @@ class LongitudinalMpc:
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
-    v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05)
+    v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05) if self.cruise_profile is None else self.cruise_profile(v_ego, self.x0[2], T_IDXS)  # dragonpilot hook
     # TODO does this make sense when max_a is negative?
     v_upper = v_ego + (T_IDXS * CRUISE_MAX_ACCEL * 1.05)
     v_cruise_clipped = np.clip(v_cruise * np.ones(N+1), v_lower, v_upper)
