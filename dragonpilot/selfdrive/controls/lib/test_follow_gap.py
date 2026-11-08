@@ -13,9 +13,9 @@ def lead(d, v_kph, status=True):
 
 
 def test_f8_equal_speed_short_gap_brakes_gently():
-  # f8-like at 40 km/h: 20 m, lead 40 km/h -> wanted gap 2.2 x 11.1 + 6 = 30.4 m
+  # 40 km/h: 12 m, lead 40 km/h -> wanted gap 1.3 x 11.1 + 6 = 20.4 m
   fg = G.FollowGap(DT)
-  outs = [fg.update(40 * KPH, lead(20.0, 40), 0.05, False) for _ in range(60)]
+  outs = [fg.update(40 * KPH, lead(12.0, 40), 0.05, False) for _ in range(60)]
   assert outs[0] <= 0.0                                     # no gas toward it
   assert -G.A_MAX - 1e-9 <= min(outs) < -0.3                # a gentle brake builds up
   assert np.min(np.diff(outs)) >= -G.J_ON * DT - 1e-9       # softly
@@ -34,14 +34,14 @@ def test_from_40_kmh_up():
   fg = G.FollowGap(DT)
   assert fg.update(30 * KPH, lead(10.0, 30), 0.3, False) == 0.3            # below 35 km/h: untouched
   fg = G.FollowGap(DT)
-  outs = [fg.update(40 * KPH, lead(1.6 * 40 * KPH + 6, 40), 0.2, False) for _ in range(40)]
+  outs = [fg.update(40 * KPH, lead(0.8 * 40 * KPH + 6, 40), 0.2, False) for _ in range(40)]
   assert outs[0] <= 0.0 and min(outs) < -0.2                               # 40 km/h full
   fg = G.FollowGap(DT)
-  outs = [fg.update(47.5 * KPH, lead(1.6 * 47.5 * KPH + 6, 47.5), 0.2, False) for _ in range(40)]
-  assert -0.21 < min(outs) < 0.0                                            # 47.5 km/h half
-  for v in (55.0, 70.0, 100.0):                                             # 55 km/h and up: zero (owner ~14:30)
+  outs = [fg.update(45 * KPH, lead(0.8 * 45 * KPH + 6, 45), 0.2, False) for _ in range(40)]
+  assert -0.21 < min(outs) < 0.0                                            # 45 km/h half
+  for v in (50.0, 70.0, 100.0):                                             # 50 km/h and up: zero (owner ~15:00)
     fg = G.FollowGap(DT)
-    assert all(fg.update(v * KPH, lead(1.6 * v * KPH + 6, v), 0.2, False) == 0.2 for _ in range(40))
+    assert all(fg.update(v * KPH, lead(0.8 * v * KPH + 6, v), 0.2, False) == 0.2 for _ in range(40))
   fg = G.FollowGap(DT)
   assert fg.update(45 * KPH, lead(30.0, 0.0), 0.3, False) == 0.3           # stopped lead: not this module
 
@@ -81,9 +81,9 @@ def test_gas_follows_lead_gently_near_gap():
 
 
 def test_short_gap_opening_follows_with_gas():
-  # fc 13:51:43: 43.7 km/h, 26.5 m (wanted 32.7 m), lead 45.5 km/h and pulling away -> some gas, not 0
+  # fc 13:51:43 scaled to 1.3 s: 40 km/h, 15 m (wanted 20.4 m), lead pulling away at 0.7 m/s -> some gas, not 0
   fg = G.FollowGap(DT)
-  out = fg.update(43.7 * KPH, lead(26.5, 46.0), 0.7, False)
+  out = fg.update(40 * KPH, lead(15.0, 42.5), 0.7, False)
   assert 0.0 < out < 0.3
   fg = G.FollowGap(DT)
-  assert fg.update(43.7 * KPH, lead(26.5, 44.5), 0.7, False) <= 0.0   # opening < 0.3 m/s: still no gas
+  assert fg.update(40 * KPH, lead(15.0, 40.8), 0.7, False) <= 0.0     # opening < 0.3 m/s: still no gas
