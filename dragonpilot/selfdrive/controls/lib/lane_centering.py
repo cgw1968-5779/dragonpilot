@@ -129,7 +129,15 @@ LINE_W_MAX = 0.85  # dpcr (owner 2026-11-05 "as strong as possible"): between tn
 # ahead on the arc of the last command (no extra fit), and the lookahead is 1.7 s (was 2.0). Closed-loop sim on route
 # e0, 85-100 km/h, std of the 15 m-ahead offset: straight 12.6 -> 11.4, left curves 11.8 -> 10.7, right 11.6 -> 10.9 cm;
 # command jerk p95 0.86 -> 0.81 (75-85 km/h right curves 8.6 -> 9.0 cm inside). Return point: tag dpcr-lat-good-20261105.
-LINE_PRED_T = 0.36          # s: measured command -> actual curvature delay (route e4)
+# dpcr (owner 2026-11-08, route 000000fa 13:17 "slow left-right ping-pong on a dead straight road at 105 km/h"):
+# 6.4 s weave, lane offset std 8.5 cm (+-12-15 cm), on every straight of the route and on fb too, not shrinking with
+# drive time (learned params steady: lagd 0.455 s, steerRatio 14.4). Fit on fa rlogs: command -> steering-angle
+# curvature 0.30 s dead time + 0.30 s first order, gyro yaw another 0.15-0.2 s -> ~0.75 s in total, so 0.36 s
+# under-predicted by half and the pursuit loop is under-damped (sim: natural period 6.0 s, overshoot 31-38 %).
+# Noise closed-loop sim with the real LaneCentering: offset std -10..13 %, command lat accel std -30..40 %; line
+# pursuit still available 100 % of fa frames >= 60 km/h (the fit needs xd further). Lookahead/gains/filter unchanged
+# (no added lag). First, minimal step; if it feels late or lags: back to 0.36 / tag dpcr-lat-good-20261105.
+LINE_PRED_T = 0.75          # s: measured command -> actual yaw delay (route fa; 0.36 from route e4 until 11-08)
 LINE_W_RISE = 0.5           # 1/s: 2 s to take over
 LINE_W_FALL = 2.0           # 1/s: 0.5 s to hand back
 LINE_FILTER_TAU = 0.1       # s; low-pass on the line curvature (0.3 oscillated in the closed-loop sim with 0.5 s steering lag)
