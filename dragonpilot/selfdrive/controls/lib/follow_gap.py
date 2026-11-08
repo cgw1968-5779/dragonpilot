@@ -28,6 +28,11 @@ Ease off at once while the gap already opens (owner 2026-11-08 13:05: "at mid/lo
 cut-in makes the gap grow, ease the brake off smoothly right away"): 13:04:47 at 38 km/h the gap grew 0.5-0.6 m/s and
 this brake still held -0.24..-0.30 for 2 s (wanted opening 1 m/s). The opening speed now counts G_OPEN x while it is
 positive, so the brake is gone by about +0.3 m/s (1 km/h), released at J_OFF; at equal speeds it is unchanged.
+Gas while a short gap already opens (owner 2026-11-08, route 000000fc 13:51: "the lead pulled away quickly and we
+did not keep up"; chose this over raising the drive mode ceiling): at 44 km/h, 26 m (wanted 32.7 m) the lead ran away
+at +0.5 m/s and accelerating, but the gas side wanted the full shortfall opening (0.78 m/s) first, so the plan held 0
+for 3 s. The gas side now only wants DV_GAS_OPEN: once the gap opens faster than that, gas follows the lead in
+proportion (kp x the excess); the brake side and the wanted gap are unchanged.
 Recorded lead 13:11:25-13:13:25 through this module (plan = cruise gas): gas->brake flips within 4 s 6 -> 0, largest
 2 s swing 0.60 -> 0.40, rms jerk 0.098 -> 0.054; the recorded drive itself had 6 / 0.58.
 """
@@ -42,6 +47,7 @@ V_W = [0.0, 1.0, 1.0, 0.0]
 LEAD_MOVING_V = 3.0     # m/s
 T_OPEN = 8.0            # s: open the shortfall over about this long
 DV_OPEN_MAX = 1.0       # m/s
+DV_GAS_OPEN = 0.3       # m/s: a short gap that already opens this fast may follow the lead with gas (owner 11-08 fc 13:51)
 KP = 0.5                # m/s^2 per m/s
 A_MAX = 0.4             # m/s^2: gentle
 J_ON = 0.3              # m/s^3
@@ -70,7 +76,7 @@ class FollowGap:
       want = min(short / T_OPEN, DV_OPEN_MAX)  # < 0 beyond the gap: the closing speed still allowed
       band = max(GAS_BAND, T_GAS_BAND * v_ego)
       if short > -band:
-        gas_cap = max(kp * (opening - want), 0.0) + float(np.interp(-short, [0.5 * band, band], [0.0, 2.0]))
+        gas_cap = max(kp * (opening - min(want, DV_GAS_OPEN)), 0.0) + float(np.interp(-short, [0.5 * band, band], [0.0, 2.0]))
       if short > 0.0:
         rel = opening * (G_OPEN if opening > 0.0 else 1.0)
         target = w * float(np.clip(kp * (want - rel), 0.0, A_MAX))

@@ -77,3 +77,13 @@ def test_gas_follows_lead_gently_near_gap():
   v = 55 * KPH; d = G.HW_MIN * v + G.STOP_DISTANCE + 1.0
   out = fg.update(v, lead(d, 58), 0.3, False)
   assert 0.0 < out < 0.3
+
+
+
+def test_short_gap_opening_follows_with_gas():
+  # fc 13:51:43: 43.7 km/h, 26.5 m (wanted 32.7 m), lead 45.5 km/h and pulling away -> some gas, not 0
+  fg = G.FollowGap(DT)
+  out = fg.update(43.7 * KPH, lead(26.5, 46.0), 0.7, False)
+  assert 0.0 < out < 0.3
+  fg = G.FollowGap(DT)
+  assert fg.update(43.7 * KPH, lead(26.5, 44.5), 0.7, False) <= 0.0   # opening < 0.3 m/s: still no gas
