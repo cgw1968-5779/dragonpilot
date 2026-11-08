@@ -10,6 +10,7 @@ from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.auto_hold import AutoBrakeHold, auto_hold_available
+from opendbc.car.toyota.urgent_switch import UrgentSwitch
 from types import SimpleNamespace
 # dragonpilot (dpcr, owner 2026-11-06 "copy tncr1's mid/low-speed longitudinal control exactly"): tncr1's send side
 from opendbc.car.toyota.tncr1_send.end_force import end_force_cap
@@ -97,6 +98,7 @@ class CarController(CarControllerBase):
     self.brake_corrections = BrakeCommandCorrections(DT_CTRL * 3)  # tncr1: see tncr1_send/brake_onset.py
     self.engage_close = EngageCloseStop()  # tncr1: see tncr1_send/engage_close_stop.py
     self.lead_one = None  # set by card (dragonpilot hook): radarState.leadOne as tncr1's CarControlSP.leadOne
+    self.urgent_switch = UrgentSwitch(DT_CTRL * 3)  # dragonpilot: the planner's urgent brake switch, same rules
     # *** end long control state ***
 
     self.packer = CANPacker(dbc_names[Bus.pt])
@@ -234,8 +236,13 @@ class CarController(CarControllerBase):
         pcm_accel_cmd = actuators.accel
         # dragonpilot hook (dpcr 2026-11-08, route f8 00:39): the plan at full brake above 20 km/h (urgent_brake.py or the
         # MPC itself) is sent as is - no soft onset, no PID back-off (that backed -3.5 off to -2.6..-3.1 on f8 00:39)
-        max_brake = CC.longActive and actuators.accel <= self.params.ACCEL_MIN + 1e-3 and CS.out.vEgo > 20.0 / 3.6
+        # 11-08 later (route fe 14:17, owner: the urgent brake starts soft and brakes in proportion to the need): while
+        # the urgent brake switch is on (opendbc toyota/urgent_switch.py, same as the planner's) its shaped brake is sent
+        # as is too, so the car gets the designed build instead of the lead-urgent onset template (<= 4 m/s^3)
         lead_one = self.lead_one if self.lead_one is not None else _NO_LEAD
+        self.urgent_switch.update(CS.out.vEgo, lead_one, not CC.longActive)  # dragonpilot hook
+        max_brake = CC.longActive and CS.out.vEgo > 20.0 / 3.6 and \
+          (actuators.accel <= self.params.ACCEL_MIN + 1e-3 or (self.urgent_switch.active and actuators.accel < 0.0))
         self.engage_onset.cruise_state(CS.out.cruiseState.enabled)  # tncr1 hook
         if CC.longActive:
           self.prev_accel = self.engage_onset.start_accel(self.prev_accel, CS.out.aEgo, CS.out.vEgo)  # tncr1 hook
@@ -250,7 +257,7 @@ class CarController(CarControllerBase):
                                                      engage_j_down=self.engage_close.j_down if self.engage_close.active else None,
                                                      lead=lead_one)  # tncr1 hook
           windup_step = self.engage_onset.up_step(True)
-          pcm_accel_cmd = rate_limit(pcm_accel_cmd, self.prev_accel, winddown_step, windup_step) if not max_brake else self.params.ACCEL_MIN
+          pcm_accel_cmd = rate_limit(pcm_accel_cmd, self.prev_accel, winddown_step, windup_step) if not max_brake else max(actuators.accel, self.params.ACCEL_MIN)
         else:
           self.brake_onset.reset()
           self.engage_onset.reset()
@@ -301,7 +308,7 @@ class CarController(CarControllerBase):
                                                        relaxed=hud_control.leadDistanceBars == 3,
                                                        handover=not self.engage_close.active)  # tncr1 hook
           pcm_accel_cmd = self.delivery_trim.apply(pcm_accel_cmd, CS.out.vEgo, CS.out.standstill, CC.longActive)  # tncr1 hook
-          pcm_accel_cmd = self.params.ACCEL_MIN if max_brake else pcm_accel_cmd  # dragonpilot hook: full brake, see above
+          pcm_accel_cmd = max(actuators.accel, self.params.ACCEL_MIN) if max_brake else pcm_accel_cmd  # dragonpilot hook: urgent brake as is, see above
           pcm_accel_cmd = end_force_cap(pcm_accel_cmd, actuators.accel, CS.out.vEgo, CS.out.standstill)  # tncr1 hook
         else:
           self.long_pid.reset()

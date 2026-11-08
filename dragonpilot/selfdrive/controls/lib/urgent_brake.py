@@ -16,98 +16,74 @@ rest); OFF when need < NEED_OFF or v < V_OFF. While ON the plan is ACCEL_MIN (-3
 soft onset and PID back-off, toyota carcontroller hook); on OFF the plan comes back at J_HANDBACK. f8 00:39 crosses
 NEED_ON 2.5 at 2.4 s before the driver braked (the plan reached -3.5 0.5 s later, the send side never did). Over ~9 min
 of engaged lead following >= 30 km/h on routes d6-f8 nothing else switches on.
-"""
-from opendbc.car.interfaces import ACCEL_MIN
 
-GAP = 3.2               # m
-T_REACT = 0.5           # s
-V_ON = 40.0 / 3.6       # m/s
-V_OFF = 20.0 / 3.6      # m/s
-NEED_ON = 2.5           # m/s^2, a moving lead
-NEED_ON_STOPPED = 3.0   # m/s^2, a stopped lead
-NEED_OFF = 1.5          # m/s^2
-LEAD_MOVING_V = 3.0     # m/s
-# the speed + gap regime of f8 00:39 (owner 2026-11-08: "record that distance and speed - in that state no soft onset,
-# emergency braking"): from REGIME_V with a time gap <= REGIME_HW a lead braking at REGIME_A or harder switches on at
-# once, before the need above catches up (aLeadK lags the real decel). f8: 58 km/h, 28.2 m (1.75 s), aLeadK -1.75 at
-# -2.75 s (need ON was -2.47 s). Scan of ~13 min following >= 40 km/h (11-03..11-08): only f8 00:39 and f0 23:17
-# (53 km/h, 26.8 m, lead -2.1) switch on.
-REGIME_V = 50.0 / 3.6   # m/s
-REGIME_HW = 2.0         # s
-REGIME_A = -1.75        # m/s^2
-# owner 2026-11-08 (later): "back to the soft-brake principle - every brake starts soft (40-60 km/h keeps a safe gap,
-# follow_gap.py); only an unusual cut-in that suddenly puts a lead very close skips the soft start and goes to a
-# possible emergency brake". So an ordinary switch-on (need / regime above) starts with SOFT_T of soft build at
-# SOFT_J, then goes to ACCEL_MIN ("0.1 s after the start, straight to the maximum"); a CUT-IN goes there at once.
+Soft start in proportion to the need (owner 2026-11-08 ~14:30, route 000000fe 14:17:20: "a cut-in lead, it braked far
+harder than needed" -> "the urgent brake should start soft too; brake in proportion to the need"). 14:17: after a
+cut-in the lead slowed 103 -> 86 km/h; at 101 km/h, 43.8 m (1.56 s), aLeadK -1.93 the regime switched on and the plan
+went to -3.5 after 0.1 s (car -3.08, 28 km/h lost) though the need was 1.9-2.1 and the lead stopped braking 1.5 s later.
+At its trigger f8 00:39 looked the same (58 km/h, 28 m, aLeadK -1.75, need 1.7, closing 2 m/s) - only what the lead did
+next differed - so the switch is unchanged and the brake is shaped instead: after the SOFT_T start it builds at
+J(need) (J_NEED_BP -> J_NEED_V: 6 m/s^3 at need 1.5, 15 at 2.5) toward K_NEED x need, the full ACCEL_MIN only from
+NEED_FULL; while the need falls it eases toward that at J_EASE; never lighter than the plan. A cut-in still goes to
+ACCEL_MIN at once. The send side passes this brake as is while the switch is on (carcontroller hook, shared
+opendbc toyota/urgent_switch.py) so the car gets the designed build, not the lead-urgent onset template (<= 4 m/s^3).
+Counterfactual f8 00:39 (cf_soft4.py): min gap 4.89 -> 3.54 m; 14:17 (point mass): car peak -3.49 -> -2.69, speed
+lost 28 -> 16 km/h.
+"""
+
+from opendbc.car.interfaces import ACCEL_MIN
+from opendbc.car.toyota.urgent_switch import UrgentSwitch
+import numpy as np
+
 SOFT_T = 0.1            # s
 SOFT_J = 3.0            # m/s^3 (-0.3 in the first 0.1 s)
-# cut-in: a lead that appears (newly tracked, or the lead jumps CUTIN_JUMP closer between radar frames) within
-# CUTIN_HW x v at >= CUTIN_V; for CUTIN_T after it, need >= CUTIN_NEED switches on without the soft start
-CUTIN_V = 20.0 / 3.6    # m/s
-CUTIN_HW = 1.0          # s
-CUTIN_JUMP = 5.0        # m
-CUTIN_T = 2.0           # s
-CUTIN_NEED = 1.5        # m/s^2
+J_NEED_BP = [1.5, 2.5]  # m/s^2 need
+J_NEED_V = [6.0, 15.0]  # m/s^3 build after the soft start
+K_NEED = 1.2            # brake this x the need ...
+NEED_FULL = 2.5         # m/s^2 ... and the full ACCEL_MIN from this need
+J_EASE = 2.0            # m/s^3 while the need falls
 J_HANDBACK = 2.0        # m/s^3
-
-
-def need_decel(v_ego: float, d_rel: float, v_lead: float, a_lead: float) -> float:
-  if a_lead < -0.5:
-    d_lead = v_lead * v_lead / (2.0 * -a_lead)
-    return v_ego * v_ego / (2.0 * max(d_rel + d_lead - GAP - v_ego * T_REACT, 0.5))
-  if v_lead < v_ego:
-    dv = v_ego - v_lead
-    return dv * dv / (2.0 * max(d_rel - GAP - dv * T_REACT, 0.5))
-  return 0.0
 
 
 class UrgentBrake:
   def __init__(self, dt: float):
     self.dt = dt
+    self.switch = UrgentSwitch(dt)
     self.active = False
     self.handback = False
     self.a = 0.0
     self.t_on = 0.0         # time since switching on
     self.soft = True        # this switch-on starts soft
-    self.prev_d = None      # last lead distance (cut-in detection)
-    self.cutin_t = 0.0      # time left in the cut-in window
 
   def update(self, v_ego: float, lead, a_plan: float, off: bool) -> float:
-    if off or lead is None or not lead.status:
-      need = 0.0
-      moving = False
-    else:
-      need = need_decel(v_ego, lead.dRel, lead.vLead, lead.aLeadK)
-      moving = lead.vLead >= LEAD_MOVING_V
-    # cut-in detection: a lead appearing / jumping much closer, already within CUTIN_HW
-    d_now = lead.dRel if (not off and lead is not None and lead.status) else None
-    appeared = d_now is not None and (self.prev_d is None or self.prev_d - d_now >= CUTIN_JUMP)
-    if appeared and v_ego >= CUTIN_V and d_now <= CUTIN_HW * v_ego:
-      self.cutin_t = CUTIN_T
-    else:
-      self.cutin_t = max(self.cutin_t - self.dt, 0.0)
-    self.prev_d = d_now
+    on_now = self.switch.update(v_ego, lead, off)
     if off:
       self.active = self.handback = False
       return a_plan
-    regime = (not off and lead is not None and lead.status and moving and v_ego >= REGIME_V and
-              lead.dRel <= REGIME_HW * v_ego and lead.aLeadK <= REGIME_A)
-    if not self.active:
-      cutin = self.cutin_t > 0.0 and need >= CUTIN_NEED
-      if cutin or regime or (v_ego >= V_ON and need >= (NEED_ON if moving else NEED_ON_STOPPED)):
-        self.soft = not cutin
-        if not self.handback:
-          self.a = a_plan
-        self.active, self.handback, self.t_on = True, False, 0.0
-    elif need < NEED_OFF or v_ego < V_OFF:
-      self.active, self.handback = False, True
+    if on_now:
+      self.soft = not self.switch.cutin
+      if not self.handback:
+        self.a = a_plan
+      self.handback, self.t_on = False, 0.0
+    was_active, self.active = self.active, self.switch.active
     if self.active:
+      self.handback = False
       self.t_on += self.dt
-      if self.soft and self.t_on <= SOFT_T + 1e-9:
-        self.a = min(a_plan, self.a - SOFT_J * self.dt)  # the soft start (never lighter than the plan)
-      else:
+      need = self.switch.need
+      if not self.soft:
         self.a = ACCEL_MIN
+      elif self.t_on <= SOFT_T + 1e-9:
+        self.a = self.a - SOFT_J * self.dt  # the soft start
+      else:
+        target = ACCEL_MIN if need >= NEED_FULL else max(ACCEL_MIN, -K_NEED * need)
+        if self.a > target:
+          self.a = max(target, self.a - float(np.interp(need, J_NEED_BP, J_NEED_V)) * self.dt)
+        else:
+          self.a = min(target, self.a + J_EASE * self.dt)
+      self.a = min(a_plan, self.a)  # never lighter than the plan
       return self.a
+    if was_active:
+      self.handback = True
     if self.handback:
       self.a = min(a_plan, self.a + J_HANDBACK * self.dt)
       if self.a >= a_plan - 1e-6:

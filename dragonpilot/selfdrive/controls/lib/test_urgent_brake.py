@@ -16,7 +16,7 @@ def test_f8_0039_switches_to_full_brake_at_once():
   first = ub.update(57.6 * KPH, lead(27.4, 45.6, -2.54), -2.07, False)
   assert ub.active and first > U.ACCEL_MIN                          # soft start first (owner: every brake starts soft)
   outs = [ub.update(57.6 * KPH, lead(27.4, 45.6, -2.54), -2.07, False) for _ in range(3)]
-  assert outs[-1] == U.ACCEL_MIN                                    # then the maximum after 0.1 s
+  assert outs[-1] == U.ACCEL_MIN                                    # need >= NEED_FULL: the maximum within 0.2 s
 
 
 def test_normal_following_and_a_firm_lead_brake_do_not_switch():
@@ -27,7 +27,7 @@ def test_normal_following_and_a_firm_lead_brake_do_not_switch():
   assert ub.update(58 * KPH, lead(29.5, 58, 0.0), 0.1, False) == 0.1
   # below 40 km/h never
   ub = U.UrgentBrake(DT)
-  ub.prev_d = 8.3                                                  # tracked before (not a cut-in)
+  ub.switch.prev_d = 8.3                                                  # tracked before (not a cut-in)
   assert ub.update(35 * KPH, lead(8.0, 10, -3.0), -2.5, False) == -2.5
   assert not ub.active
 
@@ -75,6 +75,32 @@ def test_cut_in_skips_the_soft_start():
   assert ub.update(60 * KPH, lead(12.0, 65), 0.1, False) == 0.1
   # a lead closing in normally (no jump) starts soft
   ub = U.UrgentBrake(DT)
-  ub.prev_d = 12.3
+  ub.switch.prev_d = 12.3
   ub.update(60 * KPH, lead(12.0, 40), -0.5, False)                 # need ~2.6, tracked closing in (no jump)
   assert ub.active and ub.a > U.ACCEL_MIN
+
+
+
+def test_fe_1417_cut_in_lead_slowing_brakes_in_proportion():
+  # route fe 14:17:20.5: 101 km/h, 43.8 m (1.56 s), lead 94 km/h, aLeadK -1.93 -> regime on, need ~1.9:
+  # soft start, then ~1.2 x need (about -2.3), not the full -3.5
+  ub = U.UrgentBrake(DT)
+  ld = lead(43.8, 94.1, -1.93)
+  outs = [ub.update(100.8 * KPH, ld, -0.21, False) for _ in range(20)]
+  assert ub.active
+  assert outs[1] >= -0.21 - 2 * U.SOFT_J * DT - 1e-9                # first 0.1 s soft
+  need = ub.switch.need
+  assert 1.7 < need < 2.2
+  assert abs(outs[-1] + U.K_NEED * need) < 0.05                    # settles at 1.2 x need
+  assert min(outs) > U.ACCEL_MIN + 0.5
+  steps = [outs[i] - outs[i + 1] for i in range(len(outs) - 1)]
+  assert max(steps) <= 15.0 * DT + 1e-9                           # built at <= J(need)
+
+
+def test_need_falling_eases_off():
+  ub = U.UrgentBrake(DT)
+  for _ in range(20):
+    ub.update(100.8 * KPH, lead(43.8, 94.1, -1.93), -0.21, False)
+  a0 = ub.a
+  out = ub.update(100.8 * KPH, lead(43.8, 94.1, -1.6), -0.21, False)  # need ~1.6: still on, lighter target
+  assert ub.active and a0 < out <= a0 + U.J_EASE * DT + 1e-9
