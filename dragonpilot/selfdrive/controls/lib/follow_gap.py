@@ -35,6 +35,13 @@ for 3 s. The gas side now only wants DV_GAS_OPEN: once the gap opens faster than
 proportion (kp x the excess); the brake side and the wanted gap are unchanged.
 Recorded lead 13:11:25-13:13:25 through this module (plan = cruise gas): gas->brake flips within 4 s 6 -> 0, largest
 2 s swing 0.60 -> 0.40, rms jerk 0.098 -> 0.054; the recorded drive itself had 6 / 0.58.
+
+Rewrite 2026-11-08 16:13 (owner, route 00000103: "following still lags far behind ... following must be as tight as
+before these changes; the brake should only start earlier at 40-50 km/h"): replayed, the gas cap held the plan at
+~0 for 8.75 s in 10 min at 35-45 km/h with the lead 20-25 m ahead (it fades out only one band beyond the gap). The
+module is now brake-only: no gas cap and no brake at equal speeds or while the gap opens - only a gentle brake
+(KP x closing speed, gain from K_NEAR at the gap to full F_FULL short, <= A_MAX, J_ON / J_OFF) while the car closes
+in on a moving lead inside HW_MIN x v + STOP_DISTANCE. The MPC's own firmer brake always wins (min).
 """
 import numpy as np
 
@@ -47,18 +54,12 @@ STOP_DISTANCE = 6.0     # m (as the MPC)
 V_BP = [35.0 / 3.6, 40.0 / 3.6, 50.0 / 3.6]
 V_W = [0.0, 1.0, 0.0]
 LEAD_MOVING_V = 3.0     # m/s
-T_OPEN = 8.0            # s: open the shortfall over about this long
-DV_OPEN_MAX = 1.0       # m/s
-DV_GAS_OPEN = 0.3       # m/s: a short gap that already opens this fast may follow the lead with gas (owner 11-08 fc 13:51)
 KP = 0.5                # m/s^2 per m/s
 A_MAX = 0.4             # m/s^2: gentle
 J_ON = 0.3              # m/s^3
 J_OFF = 0.5             # m/s^3
-GAS_BAND = 5.0          # m: the gas band is at least this
-T_GAS_BAND = 1.0        # s: gas band = this x v; the cap fades out over its second half
 F_FULL = 0.2            # shortfall / wanted gap from which the full KP applies
 K_NEAR = 0.2            # KP fraction right at the wanted gap
-G_OPEN = 3.0            # a gap that already opens counts this x (ease off at once)
 
 
 class FollowGap:
@@ -67,25 +68,18 @@ class FollowGap:
     self.brake = 0.0  # >= 0, the gentle brake now applied
 
   def update(self, v_ego: float, lead, a_plan: float, off: bool) -> float:
+    """Brake earlier only (owner 2026-11-08 16:13, route 00000103): no gas cap - the gas is the MPC's own, so the
+    car follows as tight as before; a gentle brake only while closing in on a moving lead inside HW_MIN x v + 6 m."""
     w = float(np.interp(v_ego, V_BP, V_W))
     target = 0.0
-    gas_cap = None
     if not off and w > 0.0 and lead is not None and lead.status and lead.vLead >= LEAD_MOVING_V:
       d_min = HW_MIN * v_ego + STOP_DISTANCE
       short = d_min - lead.dRel
-      opening = lead.vLead - v_ego
-      kp = KP * float(np.interp(short / d_min, [0.0, F_FULL], [K_NEAR, 1.0]))
-      want = min(short / T_OPEN, DV_OPEN_MAX)  # < 0 beyond the gap: the closing speed still allowed
-      band = max(GAS_BAND, T_GAS_BAND * v_ego)
-      if short > -band:
-        gas_cap = max(kp * (opening - min(want, DV_GAS_OPEN)), 0.0) + float(np.interp(-short, [0.5 * band, band], [0.0, 2.0]))
-      if short > 0.0:
-        rel = opening * (G_OPEN if opening > 0.0 else 1.0)
-        target = w * float(np.clip(kp * (want - rel), 0.0, A_MAX))
+      closing = v_ego - lead.vLead
+      if short > 0.0 and closing > 0.0:
+        kp = KP * float(np.interp(short / d_min, [0.0, F_FULL], [K_NEAR, 1.0]))
+        target = w * float(np.clip(kp * closing, 0.0, A_MAX))
     self.brake = float(np.clip(target, self.brake - J_OFF * self.dt, self.brake + J_ON * self.dt))
-    out = a_plan
-    if gas_cap is not None:
-      out = min(out, w * gas_cap + (1.0 - w) * max(a_plan, 0.0)) if out > 0.0 else out
     if self.brake > 0.0:
-      out = min(out, -self.brake)
-    return out
+      return min(a_plan, -self.brake)
+    return a_plan
