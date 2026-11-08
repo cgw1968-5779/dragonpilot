@@ -38,7 +38,8 @@ Recorded lead 13:11:25-13:13:25 through this module (plan = cruise gas): gas->br
 """
 import numpy as np
 
-HW_MIN = 1.3            # s (owner 2026-11-08 ~15:00: "2.2 is too much, make it 1.3, 40-50 km/h, zero at 50"; was 2.2)
+HW_MIN = 0.5            # s total gap (owner 2026-11-08 ~15:10: "I only meant a little extra distance - make it 0.5 s",
+                        # chose the TOTAL 0.5 s + 6 m over +0.5 s on the MPC's 1.25 s; ~15:00 1.3 s, before 2.2 s)
 STOP_DISTANCE = 6.0     # m (as the MPC)
 # m/s: full at 40 km/h (faded in over 35-40), linearly out to zero at 50 km/h (owner 2026-11-08 ~15:00; ~14:30 it was
 # zero at 55, 13:30 full 40-60 and zero at 70; before that 40 km/h and up)
