@@ -26,6 +26,7 @@ from openpilot.common.file_chunker import read_file_chunked, get_manifest_path
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.helpers import usbgpu_present, modeld_pkl_path, get_tg_input_devices
 from dragonpilot.selfdrive.controls.lib.road_edge_detector import RoadEdgeDetector
+from dragonpilot.selfdrive.controls.lib.camera_offset import apply_camera_offset as camera_offset
 from dragonpilot.selfdrive.controls.lib.lane_change_defaults import AUTO_LANE_CHANGE_SEC, ROAD_EDGE_DETECTION
 
 LITE = os.getenv("LITE") is not None
@@ -276,6 +277,7 @@ def main(demo=False):
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['roadCameraState'].sensor))]
       model_transform_main = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics, False).astype(np.float32)
       model_transform_extra = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics, True).astype(np.float32)
+      model_transform_main, model_transform_extra = camera_offset(model_transform_main, model_transform_extra, sm, dc, main_wide_camera)  # dragonpilot hook
       live_calib_seen = True
 
     traffic_convention = np.zeros(2)
