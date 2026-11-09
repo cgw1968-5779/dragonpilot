@@ -5,7 +5,8 @@
 # Part of a sunnypilot-based project, distributed under the sunnypilot license (see LICENSE.md and NOTICE).
 import numpy as np
 from openpilot.common.realtime import DT_CTRL
-from dragonpilot.selfdrive.controls.lib.tncr1_long.end_force_limit import EndForceLimit, HOLD_RATE, POST_T, V_LINE, END_ACCEL, CEIL_BP, CEIL_A, \
+from dragonpilot.selfdrive.controls.lib.tncr1_long.end_force_limit import EndForceLimit, HOLD_RATE, POST_T, \
+  SETTLE_MIN, SETTLE_MAX, V_LINE, END_ACCEL, CEIL_BP, CEIL_A, \
   END_RELEASE_RATE, END_FIRM_RATE, END_GAP_MIN
 
 
@@ -35,12 +36,25 @@ def test_standstill_continues_into_the_hold_without_a_step():
   e.update(-0.6, 2.0 / 3.6, False, True)
   assert EndForceLimit().update(-0.6, 0.0, False, True) == END_ACCEL
   assert e.update(-0.6, 0.0, False, True, -0.5) == END_ACCEL      # at the stop the line is back on END_ACCEL
-  out = e.update(-1.2, 0.0, True, True)                           # the hold asks -1.2 at once
-  assert abs(out - (END_ACCEL - HOLD_RATE * DT_CTRL)) < 1e-9     # firms up at HOLD_RATE
+  # owner 2026-11-09: the instant of the stop and the body's settle stay on END_ACCEL (the hold asks -1.2 at once)
+  for _ in range(int(SETTLE_MIN / DT_CTRL) - 1):
+    assert e.update(-1.2, 0.0, True, True, -0.5) == END_ACCEL      # still settling (body moving)
+  out = e.update(-1.2, 0.0, True, True, 0.0)                      # settled after SETTLE_MIN: firms up at HOLD_RATE
+  assert abs(out - (END_ACCEL - HOLD_RATE * DT_CTRL)) < 1e-9
   for _ in range(300):
     out = e.update(-1.2, 0.0, True, True)
   assert out == -1.2 and e.out is None
   assert e.update(0.5, 0.0, True, True) == 0.5                    # launch passes
+
+
+def test_settle_ends_at_settle_max_even_if_the_body_still_moves():
+  e = EndForceLimit()
+  e.update(-0.6, 2.0 / 3.6, False, True)
+  e.update(-0.6, 0.0, False, True, -0.5)
+  outs = [e.update(-1.2, 0.0, True, True, -0.5) for _ in range(int(SETTLE_MAX / DT_CTRL) + 20)]
+  n = int(SETTLE_MAX / DT_CTRL)
+  assert all(o == END_ACCEL for o in outs[:n - 1])
+  assert outs[-1] < END_ACCEL and abs((outs[-2] - outs[-1]) - HOLD_RATE * DT_CTRL) < 1e-9
 
 
 def test_engaged_below_the_line():
@@ -82,8 +96,7 @@ def test_fixed_ceiling_from_5kph_caps_everything():  # tncr 2026-10-15 evening: 
   e3 = EndForceLimit()                                                        # into the standstill hold without a step
   e3.update(-2.7, 1.0 / 3.6, False, True)
   assert e3.update(-2.7, 0.0, False, True, -0.5) == END_ACCEL
-  out = e3.update(-1.2, 0.0, True, True)
-  assert abs(out - (END_ACCEL - HOLD_RATE * DT_CTRL)) < 1e-9
+  assert e3.update(-1.2, 0.0, True, True) == END_ACCEL           # the stop itself: END_ACCEL (settle, owner 11-09)
 
 
 def _arrive(e, a0, v0, decel, lead_d=None, lead_v=None, req=None):
@@ -149,14 +162,15 @@ def test_rebound_right_after_the_stop_keeps_the_hold():
   e = EndForceLimit()
   e.update(-0.6, 2.0 / 3.6, False, True)
   e.update(-0.6, 0.0, False, True, -0.5)
-  for _ in range(30):                                   # 0.3 s standing
+  for _ in range(30):                                   # 0.3 s standing: settling on END_ACCEL (owner 11-09)
     out = e.update(-1.2, 0.0, True, True)
+    assert out == END_ACCEL
   held = out
-  for _ in range(30):                                   # rebound: rolling 1 km/h, standstill flag off
+  for _ in range(30):                                   # rolls again at 1 km/h, standstill flag off: firms at once
     out2 = e.update(-1.2, 1.0 / 3.6, False, True, 0.9)
     assert out2 <= held + 1e-9                          # never back toward the end ceiling
     held = out2
-  assert out2 < -0.8
+  assert abs(out2 - (END_ACCEL - 30 * HOLD_RATE * DT_CTRL)) < 1e-6
   # a real launch (request >= 0) ends it at once
   assert e.update(0.4, 1.0 / 3.6, False, True) == 0.4
   # after POST_T a roll is a roll again (the ceiling applies)

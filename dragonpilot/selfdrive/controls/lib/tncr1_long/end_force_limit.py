@@ -41,6 +41,18 @@ HOLD_RATE = 1.5        # m/s^3: after the stop, toward the standstill hold (0.5 
 # keeps firming instead of dropping back to the end ceiling. A launch (request >= 0) ends it at once.
 POST_T = 2.0           # s after the first standstill of a stop
 POST_V = 2.0 / 3.6     # m/s: a rebound / creep below this is still the stop
+# dpcr, owner 2026-11-09 (route 00000000--41925a5692 13:00:17 bookmark: "at the stop point the force suddenly grows -
+# the instant of stopping must never get more brake"): with HOLD_RATE 1.5 starting on the first standstill frame the
+# request went -0.35 -> -0.45 (stop) -> -0.57 (+0.1 s) -> -0.83 (+0.3) -> -1.20 (+0.7) while the body rebounded (aEgo
+# -1.12 -> +0.08); 13:28 / 13:36 the same (-0.36 -> -0.86 in 0.3 s). Owner: "the instant of the stop -0.34". So the
+# stop SETTLES first: from the first standstill the request is never firmer than the end value (END_ACCEL, plus the
+# approved downhill extra) until the body has settled (|aEgo| < SETTLE_A after SETTLE_MIN, at most SETTLE_MAX), and only
+# then firms at HOLD_RATE into the standstill hold. The 11-08 protection stays and acts on what really happens: if the
+# wheels roll again during the settle (the standstill flag drops - the wheel-pulse creep; a rebound keeps it set, 13:00
+# +0.06 s: vEgo -0.16, flag 1), the settle ends at once and the hold firms at HOLD_RATE as before.
+SETTLE_MIN = 0.5       # s
+SETTLE_MAX = 1.0       # s
+SETTLE_A = 0.1         # m/s^2: |aEgo| below this = the body has settled
 # tncr (Corolla Cross), owner 2026-10-15 evening after route 00000073 17:16:08 (a stop that ended with 4120 N at
 # 2.7 km/h and -1.67 m/s^2 still on the car as the wheels stopped - the jolt): 'the car must, without exception, stop
 # on a force that cannot jolt; the end must ease smoothly down to -0.34 at 0 km/h; 5 km/h may still need a firm brake'.
@@ -139,6 +151,7 @@ class EndForceLimit:
     self.sent = None     # last output while moving (for END_RELEASE_RATE / END_FIRM_RATE)
     self.holding = False # the dynamic end is holding firmer than the ceiling / line
     self.post_t = None   # time since the first standstill of this stop (None = not stopped yet)
+    self.settle = False  # the stop is settling: no firmer than the end value yet
 
   def update(self, accel: float, v_ego: float, standstill: bool, long_active: bool, a_ego: float = -1.0,
              pitch: float | None = None, lead_d: float | None = None, lead_v: float | None = None) -> float:
@@ -148,15 +161,24 @@ class EndForceLimit:
       self.reset()
       return accel
     if standstill and self.post_t is None:
-      self.post_t = 0.0
+      self.post_t, self.settle = 0.0, True
     if self.post_t is not None:
       self.post_t += DT_CTRL
+      if not standstill:
+        self.settle = False  # the wheels roll again: no more waiting, the hold firms now (11-08)
       if not standstill and (v_ego > POST_V or self.post_t > POST_T):
-        self.post_t = None
+        self.post_t, self.settle = None, False
       else:
         standstill = True  # a rebound / creep right after the stop is still the stop: keep the hold firming
     if standstill:
       self.sent, self.holding = None, False
+      if self.settle:
+        if self.post_t >= SETTLE_MAX or (self.post_t >= SETTLE_MIN and abs(a_ego) < SETTLE_A):
+          self.settle = False
+        else:
+          # the instant of the stop and the body's settle: never firmer than the end value (owner 11-09)
+          self.out = max(accel, END_ACCEL - downhill_extra(pitch, v_ego, accel))
+          return self.out
       return self._update(accel, v_ego, standstill, a_ego, pitch)
     want = accel - downhill_extra(pitch, v_ego, accel)
     out = self._update(accel, v_ego, standstill, a_ego, pitch)
