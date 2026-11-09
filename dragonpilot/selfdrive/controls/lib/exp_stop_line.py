@@ -14,6 +14,17 @@ as a position on the car's own odometer (median of the last MED_N model frames, 
 the model re-plans toward the car), and handed to the stop target (stop_approach.py) as a virtual stopped lead placed
 so the car aims LINE_MARGIN before it. Everything else (experimental off, a real lead, no planned stop) passes the
 real radar lead through unchanged.
+
+Owner 2026-11-09 (route 00000000--41925a5692 12:57, "experimental stops still look random: it stopped too early, I gave
+it gas to move up, then it stopped too late, past the white line"): the stop point frozen at 5.8 km/h was ~8-10 m short
+of the line (the model itself slowed early beside a scooter); the owner pushed the car forward with the gas twice, and
+after the second push the frozen point was already behind the car, the virtual lead sat at 0.1 m and nothing braked
+(stop_approach treated it as urgent and handed back to the MPC, which never sees this virtual lead) - the car crept over
+the line at 4.5 km/h until the owner braked. Now:
+  - the driver's gas is the driver correcting where to stop: it clears the remembered stop point, and after the pedal
+    is released the model's stop point is learned again from where the car is;
+  - the virtual lead is marked (virtual=True) so stop_approach never hands it to the MPC and, once the car is at or past
+    the aim, stops it on the end line.
 """
 from types import SimpleNamespace
 
@@ -52,7 +63,11 @@ class ExpStopLine:
     self.odo += max(v_ego, 0.0) * self.dt
     exp = sm['selfdriveState'].experimentalMode
     md = sm['modelV2']
-    if not exp:
+    try:
+      gas = bool(sm['carState'].gasPressed)
+    except KeyError:
+      gas = False
+    if not exp or gas:
       self.hist, self.stop_pos, self.lost = [], None, 0
       return real_lead
     frame = getattr(md, 'frameId', None)
@@ -74,4 +89,4 @@ class ExpStopLine:
     d_virtual = self.stop_pos - self.odo + STOP_GAP - LINE_MARGIN
     if real_lead is not None and real_lead.status and real_lead.dRel < d_virtual:
       return real_lead
-    return SimpleNamespace(status=True, dRel=max(d_virtual, 0.1), vLead=0.0)
+    return SimpleNamespace(status=True, dRel=max(d_virtual, 0.1), vLead=0.0, virtual=True)

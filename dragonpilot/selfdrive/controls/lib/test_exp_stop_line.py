@@ -54,3 +54,20 @@ def test_a_closer_real_lead_wins_and_no_stop_drops_it():
   for i in range(1, 30):
     ld = xl.lead(sm(True, i, None), 0.0, REAL)
   assert ld is REAL
+
+
+def test_gas_clears_the_stop_point_and_relearns_after_release():
+  # owner 2026-11-09 12:57: the driver's gas moves the car up; after release the stop point is the model's new one
+  xl = XL.ExpStopLine(DT)
+  for i in range(50):
+    xl.lead(sm(True, i // 5, 5.0), 0.0, REAL)
+  assert xl.stop_pos is not None
+  s = sm(True, 100, 5.0)
+  s['carState'] = N(gasPressed=True)
+  assert xl.lead(s, 1.0, REAL) is REAL and xl.stop_pos is None
+  ld = None
+  for i in range(10):
+    s = sm(True, 200 + i, 1.0)
+    s['carState'] = N(gasPressed=False)
+    ld = xl.lead(s, 0.0, REAL)
+  assert ld.virtual and abs(ld.dRel - max(1.0 + STOP_GAP - XL.LINE_MARGIN, 0.1)) < 1e-6

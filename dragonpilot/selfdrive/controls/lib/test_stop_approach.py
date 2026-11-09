@@ -230,3 +230,25 @@ def test_latched_slow_lead_that_stops_braking_hands_back():
   assert not sa.stopping
   assert outs[-1] == 0.2                                   # back to the MPC
   assert np.max(np.diff(outs)) <= SA2.J_HANDBACK * 0.05 + 1e-9
+
+
+def test_virtual_lead_passed_stops_on_the_end_line():
+  # owner 2026-11-09 12:57: the experimental stop point was already behind the car after the driver's gas; the MPC
+  # never sees the virtual lead, so it must not be handed back (it sent -0.05 and the car crept over the line)
+  from types import SimpleNamespace as N
+  import numpy as np
+  from dragonpilot.selfdrive.controls.lib import stop_approach as SA
+  sa = SA.StopApproach(0.05)
+  ld = N(status=True, dRel=0.1, vLead=0.0, virtual=True)
+  v, outs = 4.5 / 3.6, []
+  for _ in range(20):
+    outs.append(sa.update(v, ld, 0.0, False, True, 0.0))
+  goal = float(np.interp(v, SA.END_CURVE_V, SA.END_CURVE_A))
+  assert abs(outs[-1] - goal) < 1e-6                           # reaches the end line
+  assert min(outs) >= goal - 1e-9                              # never firmer than it
+  assert all(b - a >= -SA.J_BUILD * 0.05 - 1e-9 for a, b in zip(outs, outs[1:], strict=False))  # built at J_BUILD
+  # a real (radar) lead that close still goes through the normal phases (unchanged)
+  sb = SA.StopApproach(0.05)
+  real = N(status=True, dRel=0.1, vLead=0.0)
+  out = sb.update(v, real, -3.0, False, True, 0.0)
+  assert sb.phase != 'release' or abs(out - goal) > 1e-3

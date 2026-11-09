@@ -89,6 +89,7 @@ A_STOPPING = 0.5        # m/s^2: and braking at least this (also the floor for i
 S_STOPPING = 6.0        # m: and it will stop within this distance
 V_EGO_STOPPING = 25.0 / 3.6  # m/s: below this ego speed
 A_KEEP = 0.3            # m/s^2: a latched lead now braking less than this is not stopping (00000103 16:13:25)
+VIRTUAL_PASSED = 0.3    # m: an experimental virtual stop-line lead this close to the aim (or past it) stops on the end line
 A_LEAD_GO = 0.3         # m/s^2: a latched lead that accelerates this much is moving again
 
 
@@ -158,6 +159,12 @@ class StopApproach:
       return self._step(a_mpc, J_HANDBACK, J_HANDBACK)
 
     need = _need(v_ego, lead.dRel)
+    if getattr(lead, 'virtual', False) and lead.dRel - STOP_GAP <= VIRTUAL_PASSED:
+      # experimental stop line (exp_stop_line.py): the car is at or past the aim. The MPC never sees this virtual lead,
+      # so no hand-back; stop on the end line itself - firmed at J_BUILD from a lighter target (the car was not braking
+      # yet, e.g. after the driver's gas), eased at J_RELEASE from a firmer one. Never firmer than the end line.
+      self.phase = 'release'
+      return self._step(float(np.interp(v_ego, END_CURVE_V, END_CURVE_A)), J_RELEASE, J_BUILD)
     if self.phase in (None, 'handback'):
       self.a = a_mpc if self.phase is None else self.a
       self.moved = was_moving and self.a < WAIT_ACCEL
