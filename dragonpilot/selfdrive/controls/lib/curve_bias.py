@@ -33,7 +33,13 @@ CURVE_OUTWARD_V_BP = [v * CV.KPH_TO_MS for v in (30., 50., 60., 70., 90., 100., 
 # perturbation sim (routes d3 / e3 / e4 rlog, model pull-back 1.5-2.5 s): 55-70 km/h curves 6-30 cm further out, 40-55
 # km/h 3-11 cm, straights and command jerk unchanged (p95 3.6 -> 3.5). Lane-line feedback (the PD centering or line mode)
 # below 70 km/h was tried first: in curves the model's near and far lane estimates disagree and both pushed INWARD.
-CURVE_OUTWARD_FRAC_V = [0.0, 0.13, 0.16, 0.13, 0.155, 0.155, 0.155]
+# dpcr, owner 2026-11-09 (route 00000000--41925a5692 13:14-13:16, 50-76 km/h S-bends, "the 55 km/h left curve still
+# drifts inside; mid-speed centring wanders"): curves still 0.3-0.8 m inside (inner-line gap down to 0.17 m), each bend
+# cut on its own side = the felt side-to-side wander; straights 50-70 km/h std 8 cm = same as 70-95. 60 / 70 km/h
+# 0.16 / 0.13 -> 0.22 / 0.17 (50 unchanged: raising it pushed 40-55 km/h curves 10-44 cm outward). Closed-loop sim
+# (whole route, model pull-back 1.5 / 2.0 / 2.5 s): 55-70 km/h curves 11-25 cm further out (were 37-43 cm inside),
+# 40-55 km/h 1-5 cm, never past the centre; straights unchanged, command jerk p95 2.69 -> 2.60.
+CURVE_OUTWARD_FRAC_V = [0.0, 0.13, 0.22, 0.17, 0.155, 0.155, 0.155]
 
 
 def apply_curve_outward_bias(desired_curvature: float, v_ego: float) -> float:
