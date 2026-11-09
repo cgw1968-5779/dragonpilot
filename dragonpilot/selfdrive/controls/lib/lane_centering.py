@@ -17,6 +17,8 @@ import numpy as np
 
 from openpilot.common.filter_simple import FirstOrderFilter
 
+from dragonpilot.selfdrive.controls.lib.lane_choice import LaneChoice
+
 
 def blend(normal: float, straight: float, w: float) -> float:
   return normal + (straight - normal) * w
@@ -185,6 +187,7 @@ class LaneCentering:
     self.fits: dict[int, np.ndarray] = {}
     self.info_key = None  # model frame self.info belongs to
     self.info = None
+    self.choice = LaneChoice(dt)  # 15-70 km/h lane choice (splits, left-turn bays, the driver's aim)
 
   def centre_fit(self, model_v2, x_max: float) -> tuple[int, np.ndarray | None]:
     """Quadratic fit (c2, c1, c0) of the lane-line centre over the points with x <= x_max, and how many points that is.
@@ -370,9 +373,16 @@ class LaneCentering:
     return self.output
 
 
-def apply_lane_centering(lc: LaneCentering, desired_curvature: float, model_v2, CS, lat_active: bool) -> float:
+def apply_lane_centering(lc: LaneCentering, desired_curvature: float, model_v2, CS, lat_active: bool,
+                         curvature: float = 0.0) -> float:
   """controlsd hook: the model's (curve-biased) desired curvature plus the centering correction while lateral is
-  active; always updated so the correction winds down / resets when inactive."""
+  active; always updated so the correction winds down / resets when inactive. curvature: the car's actual curvature
+  (controlsd's, for the lane choice's aim point)."""
   lane_changing = model_v2 is not None and model_v2.meta.laneChangeState != 0
   corr = lc.update(model_v2, CS.vEgo, lat_active, CS.steeringPressed, 0.0, desired_curvature, lane_changing)
+  if lat_active:
+    corr += lc.choice.update(model_v2, CS.vEgo, desired_curvature, curvature, CS.steeringPressed,
+                             CS.leftBlinker or CS.rightBlinker, lane_changing)
+  else:
+    lc.choice.reset()
   return desired_curvature + corr if lat_active else desired_curvature
