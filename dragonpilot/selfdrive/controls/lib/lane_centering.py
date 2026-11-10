@@ -53,7 +53,14 @@ LANE_CENTER_MIN_SPEED = 8.0        # m/s (~30 km/h): below this the lines are to
 # turn): the correction sat on its cap (0.6 m/s^2 = 3.5e-3 1/m at 12 m/s, ~30% of the model's own swing) in phase
 # with the model's correction, and the car swung left/right with a ~3 s period for 10 s. The driver wants low speed
 # left exactly as stock; the feedback fades in between 70 and 80 km/h.
-LANE_CENTER_FADE_BP = [19.4, 22.2]  # m/s (70, 80 km/h)
+# dpcr (owner 2026-11-10, "what else can improve the low-speed centring" -> "do it"): from 30 km/h, but on STRAIGHTS only
+# below 70 km/h (see LOW_STRAIGHT_*). Cross cmd -> yaw delay measured with the gyro 0.54 s (Altis 0.40-0.44 s): the
+# Altis's full 30 km/h centering (dppb c4d851b9) swayed in the Cross sim once the delay reached 0.65 s and pushed the
+# curves 7-24 -> 14-51 cm inside (the line pursuit takes over the curve_bias FRAC). Gated to straights, closed-loop sim
+# (routes 11-09 + d3/e3/e4, delay 0.55-0.74 s, model pull-back 1.5/2.5 s): straights 30-40 km/h +-22.3 -> 20.0 cm,
+# 40-55 +-18.9 -> 15.6, 55-70 +-14.2 -> 12.3; curves within ~4 cm of before; command jerk p95 3.17 -> 2.79; no sway at
+# any delay tried. Above 70 km/h unchanged.
+LANE_CENTER_FADE_BP = [30.0 / 3.6, 40.0 / 3.6]  # m/s (30, 40 km/h); was 70, 80 km/h
 LANE_CENTER_FADE_V = [0.0, 1.0]
 LANE_CENTER_MIN_LINE_PROB = 0.5    # the better of the two near lane lines must be at least this confident
 LANE_CENTER_MIN_OTHER_PROB = 0.4   # ...and the weaker one at least this. 0.3 let a lost outer line (prob 0.31-0.41, route 58
@@ -104,7 +111,7 @@ LANE_CENTER_FILTER_TAU = 0.5       # s; low-pass on the measured offset and head
 # from the PD correction above (w = 0) to the line curvature (w = 1). Equivalent gains of the pursuit: 2 / T^2 = 0.89
 # m/s^2 per metre (KP above 0.35), 2 / T = 1.33 m/s^2 per m/s (KD 1.20), damping ratio 0.71. The model's action is the
 # fallback whenever the lines are not trusted (exits, merges, worn paint, lane changes): w falls back in 0.5 s.
-LINE_V_BP = [70.0 / 3.6, 80.0 / 3.6]  # m/s: line mode fades in with the PD centering
+LINE_V_BP = [30.0 / 3.6, 40.0 / 3.6]  # m/s: line mode fades in with the PD centering (dpcr 11-10: 30-40, was 70-80; straights only below 70)
 # 80-90 -> 70-80 km/h (owner 2026-10-27, route 000000ba): "at 100 km/h the highway is steady, at 90 it corrects left and
 # right more". Dash 90 is ~82 km/h true (dial = 1.068 x true + 2.5), where the line weight was only ~0.2: steering
 # angle jitter 0.31 deg at true 78-84 km/h vs 0.20 at 88-95 (lateral-accel jitter about equal; the same correction
@@ -139,6 +146,8 @@ LINE_W_MAX = 0.85  # dpcr (owner 2026-11-05 "as strong as possible"): between tn
 # Noise closed-loop sim with the real LaneCentering: offset std -10..13 %, command lat accel std -30..40 %; line
 # pursuit still available 100 % of fa frames >= 60 km/h (the fit needs xd further). Lookahead/gains/filter unchanged
 # (no added lag). First, minimal step; if it feels late or lags: back to 0.36 / tag dpcr-lat-good-20261105.
+LOW_STRAIGHT_V = 70.0 / 3.6   # m/s: below this the centering works on straights only (handed over across 60-70 km/h)
+LOW_STRAIGHT_K = [5e-4, 1.5e-3]  # 1/m: |lane-centre curvature| full centering (R >= 2000 m) -> none (R <= 670 m)
 LINE_PRED_T = 0.75          # s: measured command -> actual yaw delay (route fa; 0.36 from route e4 until 11-08)
 # dpcr (owner 2026-11-08 after 0.75 s: "it improved, try B too"): the pose after the delay comes from the commands
 # actually sent during the last LINE_PRED_T (they are still "in the pipe"), not from the arc of the last command:
@@ -221,6 +230,13 @@ class LaneCentering:
     self.output = 0.0
     self.k_hist = None
 
+  def _straight_gate(self, v_ego: float) -> float:
+    """1 above LOW_STRAIGHT_V; below it 1 on a straight and 0 in a curve (the curve stays with the model + curve_bias)"""
+    if v_ego >= LOW_STRAIGHT_V:
+      return 1.0
+    g = float(np.interp(self.lane_k, LOW_STRAIGHT_K, [1.0, 0.0]))
+    return g + (1.0 - g) * float(np.interp(v_ego, [LOW_STRAIGHT_V - 10.0 / 3.6, LOW_STRAIGHT_V], [0.0, 1.0]))
+
   def _push_command(self, k: float):
     n = max(int(round(LINE_PRED_T / self.dt)), 1)
     if self.k_hist is None or len(self.k_hist) != n:
@@ -280,6 +296,7 @@ class LaneCentering:
       self.line_filter.update(model_curvature)
     self.line_valid = trusted
     w_target = LINE_W_MAX * float(np.interp(v_ego, LINE_V_BP, LINE_V_W)) if trusted else 0.0
+    w_target *= self._straight_gate(v_ego)
     rate = LINE_W_RISE if w_target > self.line_w else LINE_W_FALL
     self.line_w = _clip(w_target, self.line_w - rate * self.dt, self.line_w + rate * self.dt)
     return (1.0 - self.line_w) * self.correction + self.line_w * (self.line_filter.x - model_curvature)
@@ -367,7 +384,7 @@ class LaneCentering:
     lat_accel = LANE_CENTER_KP * error + LANE_CENTER_KD * lateral_speed + self.integral
     lat_accel = _clip(lat_accel, -LANE_CENTER_MAX_LAT_ACCEL, LANE_CENTER_MAX_LAT_ACCEL)
     target = _clip(lat_accel / max(v_ego, LANE_CENTER_MIN_SPEED) ** 2, -LANE_CENTER_MAX_CURV, LANE_CENTER_MAX_CURV)
-    target *= float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V))
+    target *= float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V)) * self._straight_gate(v_ego)
     self.correction = _clip(target, self.correction - step, self.correction + step)
     self.output = self._line_mode(model_v2, v_ego, True, model_curvature, lane_changing)
     return self.output
@@ -379,7 +396,9 @@ def apply_lane_centering(lc: LaneCentering, desired_curvature: float, model_v2, 
   active; always updated so the correction winds down / resets when inactive. curvature: the car's actual curvature
   (controlsd's, for the lane choice's aim point)."""
   lane_changing = model_v2 is not None and model_v2.meta.laneChangeState != 0
-  corr = lc.update(model_v2, CS.vEgo, lat_active, CS.steeringPressed, 0.0, desired_curvature, lane_changing)
+  # dpcr 11-10: the centering now runs from 30 km/h, inside the lane choice's 15-70 km/h; while the lane choice steers
+  # to another lane the centering hands back as in a lane change (it would pull to the model's lane)
+  corr = lc.update(model_v2, CS.vEgo, lat_active, CS.steeringPressed, 0.0, desired_curvature, lane_changing or lc.choice.active)
   if lat_active:
     corr += lc.choice.update(model_v2, CS.vEgo, desired_curvature, curvature, CS.steeringPressed,
                              CS.leftBlinker or CS.rightBlinker, lane_changing)
