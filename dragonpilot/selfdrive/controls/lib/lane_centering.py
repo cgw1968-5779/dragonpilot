@@ -58,7 +58,14 @@ LANE_CENTER_MIN_SPEED = 8.0        # m/s (~30 km/h): below this the lines are to
 # turn): the correction sat on its cap (0.6 m/s^2 = 3.5e-3 1/m at 12 m/s, ~30% of the model's own swing) in phase
 # with the model's correction, and the car swung left/right with a ~3 s period for 10 s. The driver wants low speed
 # left exactly as stock; the feedback fades in between 70 and 80 km/h.
-LANE_CENTER_FADE_BP = [19.4, 22.2]  # m/s (70, 80 km/h)
+# dppb (owner 2026-11-10, routes 000001a1/a2 + 00000193/94: "low-speed centring is poor; try centring from 30 km/h,
+# both branches"): at 30-50 km/h straights the car wandered +-16..22 cm (vs 7-9 cm with the centering above 70) and on
+# 11-10 sat 16-22 cm LEFT (the 20:16:23 bookmark, 37 km/h straight: 0.43 m left). Closed-loop perturbation sim on the
+# four routes (Altis lag 0.10 s dead + 0.40 s, model pull-back 1.5 / 2.5 s) with PD + line mode from 30-40 km/h
+# instead of 70-80: straights 30-40 km/h +-20.5 -> 18 cm, 40-55 +-16.7 -> 13.3, 55-70 +-12.7 -> 8.2, the left bias
+# 6 -> <= 3 cm, curves within +-3 cm of before, command jerk p95 1.81 -> 0.85 m/s^3. NOT on dpcr: the Cross's longer
+# lag (~0.75 s) made the same change sway (straights +-41..107 cm) in every variant tried.
+LANE_CENTER_FADE_BP = [30.0 / 3.6, 40.0 / 3.6]  # m/s (30, 40 km/h); was 70, 80 km/h
 LANE_CENTER_FADE_V = [0.0, 1.0]
 LANE_CENTER_MIN_LINE_PROB = 0.5    # the better of the two near lane lines must be at least this confident
 LANE_CENTER_MIN_OTHER_PROB = 0.4   # ...and the weaker one at least this. 0.3 let a lost outer line (prob 0.31-0.41, route 58
@@ -109,7 +116,7 @@ LANE_CENTER_FILTER_TAU = 0.5       # s; low-pass on the measured offset and head
 # from the PD correction above (w = 0) to the line curvature (w = 1). Equivalent gains of the pursuit: 2 / T^2 = 0.89
 # m/s^2 per metre (KP above 0.35), 2 / T = 1.33 m/s^2 per m/s (KD 1.20), damping ratio 0.71. The model's action is the
 # fallback whenever the lines are not trusted (exits, merges, worn paint, lane changes): w falls back in 0.5 s.
-LINE_V_BP = [70.0 / 3.6, 80.0 / 3.6]  # m/s: line mode fades in with the PD centering
+LINE_V_BP = [30.0 / 3.6, 40.0 / 3.6]  # m/s: line mode fades in with the PD centering (dppb 11-10: 30-40, was 70-80)
 # 80-90 -> 70-80 km/h (owner 2026-10-27, route 000000ba): "at 100 km/h the highway is steady, at 90 it corrects left and
 # right more". Dash 90 is ~82 km/h true (dial = 1.068 x true + 2.5), where the line weight was only ~0.2: steering
 # angle jitter 0.31 deg at true 78-84 km/h vs 0.20 at 88-95 (lateral-accel jitter about equal; the same correction
@@ -385,7 +392,9 @@ def apply_lane_centering(lc: LaneCentering, desired_curvature: float, model_v2, 
   active; always updated so the correction winds down / resets when inactive. curvature: the car's actual curvature
   (controlsd's, for the lane choice's aim point)."""
   lane_changing = model_v2 is not None and model_v2.meta.laneChangeState != 0
-  corr = lc.update(model_v2, CS.vEgo, lat_active, CS.steeringPressed, 0.0, desired_curvature, lane_changing)
+  # dppb 11-10: the centering now runs from 30 km/h, inside the lane choice's 15-70 km/h; while the lane choice steers
+  # to another lane the centering hands back as in a lane change (it would pull to the model's lane)
+  corr = lc.update(model_v2, CS.vEgo, lat_active, CS.steeringPressed, 0.0, desired_curvature, lane_changing or lc.choice.active)
   if lat_active:
     corr += lc.choice.update(model_v2, CS.vEgo, desired_curvature, curvature, CS.steeringPressed,
                              CS.leftBlinker or CS.rightBlinker, lane_changing)

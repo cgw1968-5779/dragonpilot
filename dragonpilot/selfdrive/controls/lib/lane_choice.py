@@ -39,7 +39,7 @@ driver steering, lost lines, out of speed range or HOLD_MAX_T end it at once (th
 import numpy as np
 
 V_MIN = 15.0 / 3.6         # m/s
-V_MAX = 70.0 / 3.6         # m/s (from 70 km/h the lane centering's line mode takes over)
+V_MAX = 70.0 / 3.6         # m/s (dppb: the lane centering runs from 30 km/h and hands back while this is active)
 T_AIM = 1.5                # s: the car's aim point (its own path)
 X_REF = 10.0               # m: where lanes are compared / tracked
 P_LINE = 0.4               # a line counts with at least this probability

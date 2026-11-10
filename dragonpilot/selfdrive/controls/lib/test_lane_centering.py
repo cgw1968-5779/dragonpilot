@@ -51,9 +51,9 @@ class TestLaneCentering(unittest.TestCase):
     self.assertAlmostEqual(c2, -c, places=6)         # symmetric
     lc3 = LaneCentering(DT)
     for _ in range(300):
-      c3 = lc3.update(model(0.3), 60 * CV.KPH_TO_MS, True, False)
-    self.assertEqual(c3, 0.0)                        # below the 70 km/h fade-in: no correction at all
-    self.assertAlmostEqual(LANE_CENTER_FADE_BP[0], 70 * CV.KPH_TO_MS, delta=0.1)
+      c3 = lc3.update(model(0.3), 28 * CV.KPH_TO_MS, True, False)
+    self.assertEqual(c3, 0.0)                        # below the 30 km/h fade-in: no correction at all (dppb 11-10)
+    self.assertAlmostEqual(LANE_CENTER_FADE_BP[0], 30 * CV.KPH_TO_MS, delta=0.1)
 
   def test_deadband_and_lost_lines_wind_back(self):
     v = 110 * CV.KPH_TO_MS
