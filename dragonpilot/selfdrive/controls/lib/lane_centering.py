@@ -199,6 +199,13 @@ LINE_OUT_K_BP = [1e-4, 3e-4]               # 1/m: |lane-centre curvature| (centr
 LINE_W_RISE = 0.5           # 1/s: 2 s to take over
 LINE_W_FALL = 2.0           # 1/s: 0.5 s to hand back
 LINE_FILTER_TAU = 0.1       # s; low-pass on the line curvature (0.3 oscillated in the closed-loop sim with 0.5 s steering lag)
+# dppb (owner 2026-11-11, "on highway straights steadier, almost no correction - 85 % happy, can it go higher?", then
+# "do 2"): from 70 km/h up the line target is smoothed with 0.2 s (blended from 0.1 across 60-70 km/h, unchanged
+# below). Sim on route 000001a7 (> 90 km/h, Altis lag 0.10 + 0.40 s): command jerk p95 0.52 -> 0.38 (-27 %), position
+# std 90-110 km/h 9.1 -> 9.4, 110-135 8.6 -> 8.8 cm; 0.25 s dead time the same. A longer look-ahead was worse (2.7 s:
+# std 10.9 cm, curves 60 cm inside) and 0.3 s smoothing swayed earlier, so 0.2 is the cap.
+LINE_FILTER_TAU_HIGH = 0.2  # s, from 70 km/h
+LINE_FILTER_V_BP = [60.0 / 3.6, 70.0 / 3.6]  # m/s
 LINE_CENTRE_SHIFT = 0.05    # m, + = right: dppb holds the Altis's own position (tnpb CameraOffset -0.05, dppb today ~6 cm right)
 
 
@@ -321,6 +328,7 @@ class LaneCentering:
     if k_line is not None:
       k_line *= 1.0 - float(np.interp(v_ego, LINE_OUT_V_BP, LINE_OUT_FRAC_V)) * float(np.interp(self.lane_k, LINE_OUT_K_BP, [0.0, 1.0]))
     trusted = k_line is not None and abs(k_line - model_curvature) * v_ego ** 2 <= LINE_MAX_DIFF_ACCEL
+    self.line_filter.update_alpha(float(np.interp(v_ego, LINE_FILTER_V_BP, [LINE_FILTER_TAU, LINE_FILTER_TAU_HIGH])))
     if trusted:
       if not self.line_valid and self.line_w <= 0.0:
         self.line_filter.x = k_line
