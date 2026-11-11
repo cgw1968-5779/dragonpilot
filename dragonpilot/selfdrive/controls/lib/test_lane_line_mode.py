@@ -74,15 +74,15 @@ def test_no_outward_fraction_at_or_below_85_kph():
   assert abs(out - (LINE_W_MAX * (1 / 1000 - 1 / 800) + (1 - LINE_W_MAX) * lc.correction)) < 2e-5
 
 
-def test_no_line_mode_below_30_kph_or_without_model_curvature():
-  lc = LaneCentering(DT)  # dppb 2026-11-10: fades in 30 -> 40 km/h (was 70 -> 80)
-  _run(lc, _model(offset=0.2), 28 / 3.6, 0.0, 3.0)
+def test_no_line_mode_below_20_kph_or_without_model_curvature():
+  lc = LaneCentering(DT)  # dppb 2026-11-11: fades in 20 -> 25 km/h (11-10 30 -> 40, was 70 -> 80)
+  _run(lc, _model(offset=0.2), 19 / 3.6, 0.0, 3.0)
   assert lc.line_w == 0.0
   lc_half = LaneCentering(DT)
-  _run(lc_half, _model(offset=0.2), 35 / 3.6, 0.0, 3.0)
+  _run(lc_half, _model(offset=0.2), 22.5 / 3.6, 0.0, 3.0)
   assert abs(lc_half.line_w - 0.5 * LINE_W_MAX) < 1e-6
   lc_full = LaneCentering(DT)
-  _run(lc_full, _model(offset=0.2), 42 / 3.6, 0.0, 3.0)
+  _run(lc_full, _model(offset=0.2), 27 / 3.6, 0.0, 3.0)
   assert lc_full.line_w == LINE_W_MAX
   lc2 = LaneCentering(DT)
   for _ in range(300):
@@ -163,3 +163,19 @@ def test_dppb_holds_the_car_5_cm_right_of_the_line_centre(monkeypatch):
   on_centre = _run(lc, _model(offset=0.0), v, 0.0, 6.0)
   assert abs(on_target) < 2e-5
   assert on_centre > 1e-5
+
+
+def test_low_speed_integral_held_through_a_short_line_drop_out():
+  # dppb 11-11: below 70 km/h the integral survives a drop-out of up to I_HOLD_T, then eases out; from 70 it resets
+  from dragonpilot.selfdrive.controls.lib.lane_centering import I_HOLD_T
+  for kph, held in ((40, True), (75, False)):
+    lc = LaneCentering(DT)
+    for _ in range(800):
+      lc.update(_model(offset=0.2), kph / 3.6, True, False)
+    i0 = lc.integral
+    assert i0 > 0.0
+    for _ in range(int(I_HOLD_T / DT) - 5):
+      lc.update(None, kph / 3.6, True, False)
+    assert (lc.integral == i0) if held else (lc.integral == 0.0)
+    lc.update(None, kph / 3.6, True, True)  # the driver steers: gone at any speed
+    assert lc.integral == 0.0

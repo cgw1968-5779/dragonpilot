@@ -53,7 +53,7 @@ STRAIGHT_CENTER_JERK = 1.0       # m/s^3
 # PD on offset + lane heading (damping), plus a slow capped integral for what the model keeps pulling. Simulated
 # (bicycle model, 0.3 s steering lag, 2 cm line noise): 1 m inside at 47 km/h in a 70 m curve is back within
 # 10 cm in ~8 s with no overshoot, peak correction 1.9e-3 (0.32 m/s^2); 20 cm at 90 km/h in ~10 s.
-LANE_CENTER_MIN_SPEED = 8.0        # m/s (~30 km/h): below this the lines are too close / too curved to trust
+LANE_CENTER_MIN_SPEED = 18.0 / 3.6  # m/s: below this the lines are too close / too curved to trust (dppb 11-11: was 8.0 m/s, ~30 km/h)
 # Only at highway speed. Route 55 seg 8 (2026-09-26, 33-47 km/h right after the driver released the wheel out of a
 # turn): the correction sat on its cap (0.6 m/s^2 = 3.5e-3 1/m at 12 m/s, ~30% of the model's own swing) in phase
 # with the model's correction, and the car swung left/right with a ~3 s period for 10 s. The driver wants low speed
@@ -65,7 +65,23 @@ LANE_CENTER_MIN_SPEED = 8.0        # m/s (~30 km/h): below this the lines are to
 # instead of 70-80: straights 30-40 km/h +-20.5 -> 18 cm, 40-55 +-16.7 -> 13.3, 55-70 +-12.7 -> 8.2, the left bias
 # 6 -> <= 3 cm, curves within +-3 cm of before, command jerk p95 1.81 -> 0.85 m/s^3. NOT on dpcr: the Cross's longer
 # lag (~0.75 s) made the same change sway (straights +-41..107 cm) in every variant tried.
-LANE_CENTER_FADE_BP = [30.0 / 3.6, 40.0 / 3.6]  # m/s (30, 40 km/h); was 70, 80 km/h
+# dppb (owner 2026-11-11, route 000001a6: "still too far left at low speed, also in lanes / alleys - pull it back to the
+# middle by every means"): with c4d851b9 the car sat 9-11 cm LEFT of the lane centre at 30-50 km/h (13-14 cm left of the
+# +5 cm target), even with both lines clear (prob median 0.93; 1.42 m to the left line, 1.58 m to the right). The
+# replayed module asked only +0.02..+0.08 m/s^2 for it: the model keeps pulling left, the PD is weak there, and the
+# integral that should take that pull over was zeroed every time the lines dropped out (30-40 km/h: 41 % of the time,
+# weak lines or a 2.3-2.6 m "lane"). Below 70 km/h now (blended back to the old values 50 -> 70 km/h, unchanged from
+# 70 up): KP 0.35 -> 0.6, KI 0.05 -> 0.25, the integral HELD through a line drop-out of up to I_HOLD_T (then it eases
+# out at I_DECAY), the target LOW_SHIFT 0.10 m right of the line centre (0.05 from 70 km/h, where the owner is happy),
+# and the PD + line mode from 20-25 km/h (was 30-40). Perturbation sim on 000001a6 + 000001a1/a2 (Altis lag 0.10 dead +
+# 0.40 s): straights 15-30 km/h -11.2 -> -4.0, 30-40 -10.0 -> 0.0, 40-55 -6.6 -> +5.6 cm (+ = right; the highway sits
+# at ~+5..6), sway +-12.6/14.8/14.1 -> 9.9/14.9/14.7 cm, command jerk p95 0.92 -> 0.67; 0.30 s dead time: no sway.
+LOW_V_BP = [50.0 / 3.6, 70.0 / 3.6]  # m/s: the low-speed values below hand over to the old ones
+LOW_KP, LOW_KI = 0.6, 0.25
+LOW_SHIFT = 0.10                     # m, + = right
+I_HOLD_T = 2.0                       # s: a line drop-out shorter than this keeps the integral (below 70 km/h)
+I_DECAY = 0.05                       # m/s^2 per s: then it eases out
+LANE_CENTER_FADE_BP = [20.0 / 3.6, 25.0 / 3.6]  # m/s (20, 25 km/h); was 70-80, 11-10 30-40 km/h
 LANE_CENTER_FADE_V = [0.0, 1.0]
 LANE_CENTER_MIN_LINE_PROB = 0.5    # the better of the two near lane lines must be at least this confident
 LANE_CENTER_MIN_OTHER_PROB = 0.4   # ...and the weaker one at least this. 0.3 let a lost outer line (prob 0.31-0.41, route 58
@@ -116,7 +132,7 @@ LANE_CENTER_FILTER_TAU = 0.5       # s; low-pass on the measured offset and head
 # from the PD correction above (w = 0) to the line curvature (w = 1). Equivalent gains of the pursuit: 2 / T^2 = 0.89
 # m/s^2 per metre (KP above 0.35), 2 / T = 1.33 m/s^2 per m/s (KD 1.20), damping ratio 0.71. The model's action is the
 # fallback whenever the lines are not trusted (exits, merges, worn paint, lane changes): w falls back in 0.5 s.
-LINE_V_BP = [30.0 / 3.6, 40.0 / 3.6]  # m/s: line mode fades in with the PD centering (dppb 11-10: 30-40, was 70-80)
+LINE_V_BP = [20.0 / 3.6, 25.0 / 3.6]  # m/s: line mode fades in with the PD centering (dppb 11-11: 20-25; 11-10 30-40, was 70-80)
 # 80-90 -> 70-80 km/h (owner 2026-10-27, route 000000ba): "at 100 km/h the highway is steady, at 90 it corrects left and
 # right more". Dash 90 is ~82 km/h true (dial = 1.068 x true + 2.5), where the line weight was only ~0.2: steering
 # angle jitter 0.31 deg at true 78-84 km/h vs 0.20 at 88-95 (lateral-accel jitter about equal; the same correction
@@ -184,6 +200,8 @@ class LaneCentering:
     self.correction = 0.0
     self.offset = 0.0
     self.heading = 0.0
+    self.lost_t = 1e9  # s since the lines dropped out (integral hold)
+    self.shift = LINE_CENTRE_SHIFT  # m: the target's shift right of the line centre (speed dependent)
     self.valid = False
     self.last_meas: tuple[float, float] | None = None  # this frame's (offset, heading), for the low-speed trim
     self.line_w = 0.0  # line mode weight (0 = PD correction of the model, 1 = line centre curvature)
@@ -214,7 +232,7 @@ class LaneCentering:
       self.fit_x = np.asarray(lines[1].x, dtype=float)
       y1, y2 = np.asarray(lines[1].y, dtype=float), np.asarray(lines[2].y, dtype=float)
       m = min(len(y1), len(y2))
-      self.fit_centre = (y1[:m] + y2[:m]) / 2.0 + LINE_CENTRE_SHIFT  # model y: positive = right (capnp lists do not slice)
+      self.fit_centre = (y1[:m] + y2[:m]) / 2.0 + self.shift  # model y: positive = right (capnp lists do not slice)
       self.fits = {}
     n = int(np.sum(self.fit_x <= x_max))
     if n < 4 or n > len(self.fit_centre):
@@ -227,6 +245,7 @@ class LaneCentering:
     self.offset_filter.x = 0.0
     self.heading_filter.x = 0.0
     self.integral = 0.0
+    self.lost_t = 1e9
     self.correction = 0.0
     self.valid = False
     self.line_w = 0.0
@@ -352,6 +371,8 @@ class LaneCentering:
     # past the centre after the change. Like lost lines: the correction winds down at the jerk limit and the integral
     # restarts at 0 once the change is over. Closed-loop sim (route e0, 3 changes): offset peak in the 8 s after a change
     # 44 -> 24 cm, correction peak 0.32 -> 0.10 m/s^2.
+    low = float(np.interp(v_ego, LOW_V_BP, [1.0, 0.0]))  # 1 below 50 km/h, 0 from 70 (old values exactly)
+    self.shift = LINE_CENTRE_SHIFT + low * (LOW_SHIFT - LINE_CENTRE_SHIFT)
     meas = self.measure(model_v2) if active and not steering_pressed and not lane_changing and v_ego > LANE_CENTER_MIN_SPEED else None
     self.last_meas = meas
     tau = blend(LANE_CENTER_FILTER_TAU, STRAIGHT_CENTER_TAU, straight)
@@ -364,20 +385,31 @@ class LaneCentering:
       # snap showed up as a 3.9 m/s^3 spike when replaying route 53 seg 15)
       self.offset_filter.x = 0.0
       self.heading_filter.x = 0.0
-      self.integral = 0.0
+      # below 70 km/h a short drop-out keeps the integral (what the model keeps pulling has not gone away); a driver
+      # input, a lane change, lateral off, 70 km/h and up or a long drop-out end it as before
+      hold = low > 0.0 and active and not steering_pressed and not lane_changing and v_ego > LANE_CENTER_MIN_SPEED
+      self.lost_t = self.lost_t + self.dt if hold else 1e9
+      if not hold:
+        self.integral = 0.0
+      elif self.lost_t > I_HOLD_T:
+        self.integral = _clip(0.0, self.integral - I_DECAY * self.dt, self.integral + I_DECAY * self.dt)
+      keep = self.integral / v_ego ** 2 * float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V)) if hold else 0.0
       self.valid = False
-      self.correction = _clip(0.0, self.correction - step, self.correction + step)
+      self.correction = _clip(keep, self.correction - step, self.correction + step)
       self.output = self._line_mode(model_v2, v_ego, False, model_curvature, lane_changing)
       return self.output
 
     self.valid = True
+    self.lost_t = 0.0
     self.offset = self.offset_filter.update(meas[0])
     self.heading = self.heading_filter.update(meas[1])
     error = self.offset - _clip(self.offset, -deadband, deadband)  # deadband
     lateral_speed = v_ego * math.sin(self.heading)  # positive = drifting LEFT
 
-    self.integral = _clip(self.integral + LANE_CENTER_KI * error * self.dt, -LANE_CENTER_I_LIMIT, LANE_CENTER_I_LIMIT)
-    lat_accel = LANE_CENTER_KP * error + LANE_CENTER_KD * lateral_speed + self.integral
+    kp = LANE_CENTER_KP + low * (LOW_KP - LANE_CENTER_KP)
+    ki = LANE_CENTER_KI + low * (LOW_KI - LANE_CENTER_KI)
+    self.integral = _clip(self.integral + ki * error * self.dt, -LANE_CENTER_I_LIMIT, LANE_CENTER_I_LIMIT)
+    lat_accel = kp * error + LANE_CENTER_KD * lateral_speed + self.integral
     lat_accel = _clip(lat_accel, -LANE_CENTER_MAX_LAT_ACCEL, LANE_CENTER_MAX_LAT_ACCEL)
     target = _clip(lat_accel / max(v_ego, LANE_CENTER_MIN_SPEED) ** 2, -LANE_CENTER_MAX_CURV, LANE_CENTER_MAX_CURV)
     target *= float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V))
