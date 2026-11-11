@@ -31,5 +31,5 @@ def test_low_speed_flat_rate_and_reset():
 
 
 def test_mid_speed_interpolates():
-  assert abs(L.start_rate(0.5, 75 * KPH) - 0.002425) < 1e-9  # halfway (dppb 11-11 high-speed rates -15 %)
-  assert abs(L.start_rate(3.5, 75 * KPH) - 0.003275) < 1e-9
+  assert abs(L.start_rate(0.5, 75 * KPH) - 0.002425) < 1e-9  # halfway (dppb 11-11: first-second high-speed rate -15 %)
+  assert abs(L.start_rate(3.5, 75 * KPH) - 0.0035) < 1e-9

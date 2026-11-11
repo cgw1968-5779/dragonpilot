@@ -11,11 +11,10 @@ finish the change): <= 50 km/h the flat 0.004, >= 100 km/h 0.001 (t <= 1 s) -> 0
 interpolated linearly with speed in between. Outside laneChangeStarting nothing changes.
 
 dppb (owner 2026-11-11, route 000001a7 21:37:16, auto lane change right at 94 km/h: "ease the lateral force by the
-smallest step, a smoother change"): the high-speed rates -15 % (0.001 -> 0.00085 at t <= 1 s, 0.003 -> 0.00255 at
-t >= 3 s; <= 50 km/h unchanged). That change sent a +1.03 m/s^2 peak, lateral jerk up to 1.60 m/s^3 (0.1 s mean);
-replaying the four lane changes of the route through the limiter: 21:37 jerk p95 1.39 -> 1.27, max 1.60 -> 1.43,
-21:36:47 p95 1.34 -> 1.26, 21:38:31 1.11 -> 1.04, 21:39:07 (already below the limit) unchanged; the peaks themselves
-come from the model's path after the ramp (1.03 -> 1.02).
+smallest step", then "only the INITIAL lateral acceleration, one small step"): the high-speed rate of the first second
+0.001 -> 0.00085 (-15 %); t >= 3 s (0.003) and <= 50 km/h (0.004) unchanged. Replaying the route's four lane changes
+through the limiter: 21:37 jerk p95 1.39 -> 1.34, max 1.60 -> 1.57, 21:36:47 p95 1.34 -> 1.32, 21:38:31 1.11 -> 1.07,
+21:39:07 (under the limit) unchanged; the peaks come from the model's path after the ramp (1.03 -> 1.02).
 """
 import numpy as np
 
@@ -25,7 +24,7 @@ from openpilot.common.constants import CV
 T = (1.0, 3.0)                                   # s since laneChangeStarting began
 V_BP = (50. * CV.KPH_TO_MS, 100. * CV.KPH_TO_MS)  # m/s
 RATE_T1 = (0.004, 0.00085)                       # 1/m per second at t <= 1 s, low / high speed (dppb 11-11: high 0.001 -> 0.00085)
-RATE_T3 = (0.004, 0.00255)                       # 1/m per second at t >= 3 s, low / high speed (dppb 11-11: high 0.003 -> 0.00255)
+RATE_T3 = (0.004, 0.003)                         # 1/m per second at t >= 3 s, low / high speed
 STARTING = log.LaneChangeState.laneChangeStarting
 
 
