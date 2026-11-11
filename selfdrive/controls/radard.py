@@ -11,6 +11,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
+from dragonpilot.selfdrive.controls.lib.radar_match import plausible_tracks  # dragonpilot hook
 
 
 # Default lead acceleration decay set to 50% at 1s
@@ -159,8 +160,9 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, lead_prob: float, low_speed_override: bool = True) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
-  if len(tracks) > 0 and ready and lead_prob > .5:
-    track = match_vision_to_track(v_ego, lead_msg, tracks)
+  match_tracks = plausible_tracks(v_ego, lead_msg, tracks) if len(tracks) > 0 else tracks  # dragonpilot hook
+  if len(match_tracks) > 0 and ready and lead_prob > .5:
+    track = match_vision_to_track(v_ego, lead_msg, match_tracks)
   else:
     track = None
 
