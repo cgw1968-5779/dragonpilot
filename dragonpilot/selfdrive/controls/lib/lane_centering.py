@@ -82,6 +82,18 @@ LOW_SHIFT = 0.10                     # m, + = right
 I_HOLD_T = 2.0                       # s: a line drop-out shorter than this keeps the integral (below 70 km/h)
 I_DECAY = 0.05                       # m/s^2 per s: then it eases out
 LANE_CENTER_FADE_BP = [20.0 / 3.6, 25.0 / 3.6]  # m/s (20, 25 km/h); was 70-80, 11-10 30-40 km/h
+# dppb (owner 2026-11-11, route 000001a7 21:45:42-51, 59 km/h left curve tightening to R 65 m, "Turn Exceeds Steering
+# Limit" and a takeover: "below 70 km/h centring on straights only, curves stay with the model"): the torque sat at
+# 1.0 from 21:45:45 (the Altis EPS tops out near 2.7 m/s^2, the model wanted 3.1-4.1) while the command was 15-28 %
+# below the model's curvature - curve_bias ~0.8-1.1 e-3 and the centering the rest (up to its 0.6 m/s^2 cap), pulling
+# the car (0.4-0.5 m inside) outward. Below LOW_STRAIGHT_V the PD and the line mode now act on straights only (dpcr
+# 4a80a142 gate): full with the lane centre AND the model's curvature <= 1e-3 (R >= 1000 m, 0.28 m/s^2 at 60 km/h),
+# none from 2.5e-3 (R <= 400 m), handed over to the full centering across 60-70 km/h; the integral does not build in a
+# curve. Sim (routes 1a6/1a7/1a1/1a2): straights 15-30/30-40/40-55/55-70 km/h -0.9/+0.9/+2.6/+2.2 -> -1.5/-0.2/+0.8/
+# +2.7 cm (dpcr's 5e-4/1.5e-3 gave -2.3/-2.4/-1.0); curves now the model's own line (30-40 left +4.5 -> +13.3 inside,
+# right +22.2 -> +17.0); from 70 km/h up bit-identical.
+LOW_STRAIGHT_V = 70.0 / 3.6   # m/s: below this the centering works on straights only (handed over across 60-70 km/h)
+LOW_STRAIGHT_K = [1e-3, 2.5e-3]  # 1/m: |curvature| full centering (R >= 1000 m) -> none (R <= 400 m)
 LANE_CENTER_FADE_V = [0.0, 1.0]
 LANE_CENTER_MIN_LINE_PROB = 0.5    # the better of the two near lane lines must be at least this confident
 LANE_CENTER_MIN_OTHER_PROB = 0.4   # ...and the weaker one at least this. 0.3 let a lost outer line (prob 0.31-0.41, route 58
@@ -202,6 +214,7 @@ class LaneCentering:
     self.heading = 0.0
     self.lost_t = 1e9  # s since the lines dropped out (integral hold)
     self.shift = LINE_CENTRE_SHIFT  # m: the target's shift right of the line centre (speed dependent)
+    self.k_gate = 0.0  # |curvature| for the low-speed straights-only gate (lane centre or model, the larger)
     self.valid = False
     self.last_meas: tuple[float, float] | None = None  # this frame's (offset, heading), for the low-speed trim
     self.line_w = 0.0  # line mode weight (0 = PD correction of the model, 1 = line centre curvature)
@@ -252,6 +265,13 @@ class LaneCentering:
     self.line_valid = False
     self.output = 0.0
     self.k_hist = None
+
+  def _straight_gate(self, v_ego: float) -> float:
+    """1 from LOW_STRAIGHT_V up; below it 1 on a straight and 0 in a curve (the curve stays with the model + curve_bias)"""
+    if v_ego >= LOW_STRAIGHT_V:
+      return 1.0
+    g = float(np.interp(self.k_gate, LOW_STRAIGHT_K, [1.0, 0.0]))
+    return g + (1.0 - g) * float(np.interp(v_ego, [LOW_STRAIGHT_V - 10.0 / 3.6, LOW_STRAIGHT_V], [0.0, 1.0]))
 
   def _push_command(self, k: float):
     n = max(int(round(LINE_PRED_T / self.dt)), 1)
@@ -311,7 +331,7 @@ class LaneCentering:
         self.line_filter.x = model_curvature
       self.line_filter.update(model_curvature)
     self.line_valid = trusted
-    w_target = LINE_W_MAX * float(np.interp(v_ego, LINE_V_BP, LINE_V_W)) if trusted else 0.0
+    w_target = LINE_W_MAX * float(np.interp(v_ego, LINE_V_BP, LINE_V_W)) * self._straight_gate(v_ego) if trusted else 0.0
     rate = LINE_W_RISE if w_target > self.line_w else LINE_W_FALL
     self.line_w = _clip(w_target, self.line_w - rate * self.dt, self.line_w + rate * self.dt)
     return (1.0 - self.line_w) * self.correction + self.line_w * (self.line_filter.x - model_curvature)
@@ -373,6 +393,8 @@ class LaneCentering:
     # 44 -> 24 cm, correction peak 0.32 -> 0.10 m/s^2.
     low = float(np.interp(v_ego, LOW_V_BP, [1.0, 0.0]))  # 1 below 50 km/h, 0 from 70 (old values exactly)
     self.shift = LINE_CENTRE_SHIFT + low * (LOW_SHIFT - LINE_CENTRE_SHIFT)
+    self.k_gate = max(self.lane_k, abs(model_curvature) if model_curvature is not None else 0.0)
+    gate = self._straight_gate(v_ego)
     meas = self.measure(model_v2) if active and not steering_pressed and not lane_changing and v_ego > LANE_CENTER_MIN_SPEED else None
     self.last_meas = meas
     tau = blend(LANE_CENTER_FILTER_TAU, STRAIGHT_CENTER_TAU, straight)
@@ -393,7 +415,7 @@ class LaneCentering:
         self.integral = 0.0
       elif self.lost_t > I_HOLD_T:
         self.integral = _clip(0.0, self.integral - I_DECAY * self.dt, self.integral + I_DECAY * self.dt)
-      keep = self.integral / v_ego ** 2 * float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V)) if hold else 0.0
+      keep = self.integral / v_ego ** 2 * float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V)) * gate if hold else 0.0
       self.valid = False
       self.correction = _clip(keep, self.correction - step, self.correction + step)
       self.output = self._line_mode(model_v2, v_ego, False, model_curvature, lane_changing)
@@ -408,11 +430,11 @@ class LaneCentering:
 
     kp = LANE_CENTER_KP + low * (LOW_KP - LANE_CENTER_KP)
     ki = LANE_CENTER_KI + low * (LOW_KI - LANE_CENTER_KI)
-    self.integral = _clip(self.integral + ki * error * self.dt, -LANE_CENTER_I_LIMIT, LANE_CENTER_I_LIMIT)
+    self.integral = _clip(self.integral + ki * error * gate * self.dt, -LANE_CENTER_I_LIMIT, LANE_CENTER_I_LIMIT)
     lat_accel = kp * error + LANE_CENTER_KD * lateral_speed + self.integral
     lat_accel = _clip(lat_accel, -LANE_CENTER_MAX_LAT_ACCEL, LANE_CENTER_MAX_LAT_ACCEL)
     target = _clip(lat_accel / max(v_ego, LANE_CENTER_MIN_SPEED) ** 2, -LANE_CENTER_MAX_CURV, LANE_CENTER_MAX_CURV)
-    target *= float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V))
+    target *= float(np.interp(v_ego, LANE_CENTER_FADE_BP, LANE_CENTER_FADE_V)) * gate
     self.correction = _clip(target, self.correction - step, self.correction + step)
     self.output = self._line_mode(model_v2, v_ego, True, model_curvature, lane_changing)
     return self.output

@@ -179,3 +179,20 @@ def test_low_speed_integral_held_through_a_short_line_drop_out():
     assert (lc.integral == i0) if held else (lc.integral == 0.0)
     lc.update(None, kph / 3.6, True, True)  # the driver steers: gone at any speed
     assert lc.integral == 0.0
+
+
+def test_low_speed_straights_only():
+  # dppb 2026-11-11: below 70 km/h the centering acts on straights only; curves stay with the model + curve_bias
+  v = 50 / 3.6
+  straight = LaneCentering(DT)
+  _run(straight, _model(offset=0.2), v, 0.0, 4.0)
+  assert straight.line_w == LINE_W_MAX and straight.correction != 0.0
+  curve = LaneCentering(DT)
+  _run(curve, _model(offset=0.2, curv=1 / 300), v, 1 / 300, 4.0)   # R 300 m: past LOW_STRAIGHT_K
+  assert curve.line_w == 0.0 and curve.correction == 0.0 and curve.integral == 0.0
+  model_curve = LaneCentering(DT)
+  _run(model_curve, _model(offset=0.2), v, 1 / 300, 4.0)            # weak / straight lines but the model turns
+  assert model_curve.line_w == 0.0 and model_curve.correction == 0.0
+  fast = LaneCentering(DT)
+  _run(fast, _model(offset=0.0, curv=1 / 1000), 100 / 3.6, 1 / 1000, 4.0)   # above 70 km/h: curves as before
+  assert fast.line_w == LINE_W_MAX
