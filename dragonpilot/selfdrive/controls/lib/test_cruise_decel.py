@@ -53,16 +53,16 @@ def test_normal_latches_one_decel():
   assert d2 == max(d1, (55 - 58) * KPH / cd.TAPER_T)
 
 
-def test_set_zero_schedule_owner_1109():
-  # owner 2026-11-09: set 0 from ~70 km/h: -1.0 at 60 growing linearly to the firm hold at 30, held below 10, then the end
+def test_set_zero_follows_the_owner_template_1111():
+  # owner 2026-11-11: set 0 from mid / high speed slows like the 16:51 stop (52 km/h, firm -1.35 middle, eased end)
   c = cd.CruiseDecel()
-  d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (70, 65, 60, 45, 30, 20, 10, 6, 3, 0.01)}
-  assert abs(d[70] - FLAT_COAST) < 1e-3                       # coasting at 70 as before
-  assert d[70] > d[65] > d[60] and abs(d[60] - -1.0) < 1e-9   # blends into -1.0 at 60
-  assert abs(d[45] - (-1.0 + 0.5 * (cd.SET0_DECEL_V[2] - -1.0))) < 1e-9  # linear 60 -> 30
-  assert d[30] == d[20] == d[10] == d[6] == cd.SET0_DECEL_V[1] >= -2.2
-  assert d[6] < d[3] < d[0.01] and abs(d[0.01] - -0.30) < 0.01  # linear end to the Altis -0.30
-  assert min(d.values()) >= -2.2
+  d = {k: c.decel(cd.ECO, k * KPH, 0.0, FLAT_COAST) for k in (100, 90, 85, 80, 60, 40, 25, 20, 10, 5.4, 2.3, 0.01)}
+  assert d[80] == d[60] == d[40] == cd.SET0_DECEL_V[-1]           # the firm middle, held from 40 up to 80
+  assert d[100] == d[90] > d[85] > d[80]                          # 90 and up: the high-speed easing, blended 80-90
+  ks = (40, 25, 20, 10, 5.4, 2.3, 0.01)
+  assert all(d[a] <= d[b] for a, b in zip(ks, ks[1:]))            # eases monotonically to the stop
+  assert abs(d[0.01] - -0.30) < 0.01                              # the Altis end value
+  assert -1.5 < min(d.values())                                   # never near the old -2.2
 
 
 def test_set_zero_profile_follows_the_schedule_from_a_smooth_onset():
@@ -70,8 +70,8 @@ def test_set_zero_profile_follows_the_schedule_from_a_smooth_onset():
   assert c.update(cd.ECO, 50 * KPH, 0.0, FLAT_COAST, False) == 0.0 and c.profile is not None
   t = np.array([0.0, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0])
   v = c.profile(50 * KPH, 0.0, t)
-  assert abs(v[0] - 50 * KPH) < 1e-9 and np.all(np.diff(v) <= 1e-9) and v[-1] < 0.1  # stopped at ~8 s (last value: mean over 8-10 s)
-  # mean speed over 0-0.5 s with a 1 m/s^3 onset from 0: v0 - J t^2 / 6
+  assert abs(v[0] - 50 * KPH) < 1e-9 and np.all(np.diff(v) <= 1e-9) and v[-1] < v[0]  # slowing throughout
+  # mean speed over 0-0.5 s with a PROFILE_JERK onset from 0: v0 - J t^2 / 6
   assert abs(v[1] - (50 * KPH - cd.PROFILE_JERK * 0.25 / 6)) < 0.01
   # a lowered (non-zero) set speed, a bypass or a set speed above: the stock MPC line (profile None)
   for args in ((cd.ECO, 50 * KPH, 20 * KPH, FLAT_COAST, False), (cd.ECO, 50 * KPH, 0.0, FLAT_COAST, True),

@@ -34,6 +34,17 @@ planner's cruise target becomes the speed one step of a SCHEDULED decel ahead (t
   set 0 the cruise term gets the schedule itself: profile() integrates it from the MPC's current speed over the MPC
   horizon and the MPC follows that speed curve (its cruise "obstacle") in place of the stock -1.2 straight line. Every
   other case keeps the stock line (profile is None; output identical).
+- set speed 0 like the owner's template (owner 2026-11-11, dppb, route 000001a6 16:51:37-53, four bookmarks: "when I
+  set 0 at mid / high speed I want it to slow to a stop like this - the smoothest stop, and the system can do it"): a
+  stop from 52.6 km/h for a car standing 95 m ahead sent -0.19 -> -0.53 -> -0.81 -> -1.07 -> -1.21 in ~3 s, a firm
+  -1.28 .. -1.36 from 42 down to 20 km/h, then -1.22 at 16.6, -1.02 at 10, -0.96 at 5.4, -0.65 at 3.7, -0.40 to the
+  stop. That replaces the 11-09 -2.2 schedule: SET0_DECEL_V is the template by speed, held from 40 up to 80 km/h
+  (blended into the eco / high-speed value 80 -> 90), drawn ~0.1 firmer than the template because the MPC rounds it;
+  PROFILE_JERK 0.7 gives the template's onset. x86 closed loop incl. longcontrol, set 0 at 52 km/h: -0.19 / -0.45 /
+  -0.68 / -0.86 / -1.00 / -1.11 / -1.19 / -1.24 at 0.5 s steps, -1.37 at 30, -1.38 at 25, -1.33 at 20, -1.21 at 15,
+  -1.01 at 10, -0.78 at 6, -0.40 at 2, -0.22 sent at the stop, 15.0 s (template 16 s); from 30 / 40 / 60 / 80 km/h the
+  same shape (peak -1.27 / -1.36 / -1.38 / -1.39); never firmer again after the peak. Every case other than set 0 is
+  bit-identical (77-case regression).
 - the last second before the set speed: the decel shrinks in proportion to the gap left, and the target never goes
   below the set speed itself (lands without overshoot).
 
@@ -62,11 +73,12 @@ TAPER_T = 1.0                                            # s
 # 40 km/h -0.14/-0.14/-0.37/-0.43/-0.47 for -0.15/-0.15/-0.39/-0.45/-0.49; 1 s gave a third of it)
 LOOKAHEAD_T = 3.0                                        # s: cruise target = v_ego + decel * LOOKAHEAD_T
 SET0_TARGET_MAX = 1.0 / 3.6                              # m/s: a set speed below this is "set to 0"
-SET0_DECEL_BP = [0., 6.0 / 3.6, 30.0 / 3.6, 60.0 / 3.6]    # m/s (0, 6, 30, 60 km/h)
-SET0_DECEL_V = [-0.30, -2.15, -2.15, -1.00]              # m/s^2: end, firm hold, -1.0 at 60 (see above)
-SET0_BLEND_BP = [60.0 / 3.6, 70.0 / 3.6]                 # m/s: -1.0 at 60 km/h -> the eco value (coasting) at 70
+SET0_DECEL_KPH = [0., 2.3, 3.7, 5.4, 10., 13., 16.6, 20., 25., 40.]  # km/h: the owner's 11-11 16:51 template (above)
+SET0_DECEL_BP = [x / 3.6 for x in SET0_DECEL_KPH]
+SET0_DECEL_V = [-0.30, -0.42, -0.75, -1.10, -1.12, -1.22, -1.33, -1.41, -1.44, -1.46]  # m/s^2, held above 40 km/h (drawn ~0.1 firmer: the MPC rounds it)
+SET0_BLEND_BP = [80.0 / 3.6, 90.0 / 3.6]                 # m/s: the template up to 80 km/h -> the eco / high-speed value at 90
 PROFILE_DT = 0.05                                        # s: integration step of the set-0 speed curve
-PROFILE_JERK = 1.0                                       # m/s^3: the set-0 curve grows from the current accel no faster
+PROFILE_JERK = 0.7                                        # m/s^3: the set-0 curve grows from the current accel no faster (template onset)
 PROFILE_TABLE_N = 161                                    # speeds 0 .. v0 at which the set-0 schedule is tabled per call
 
 
@@ -95,11 +107,11 @@ class CruiseDecel:
       w = np.interp(v, ECO_COAST_BLEND_BP, [0.0, 1.0])
       low = np.interp(np.minimum(v, ECO_COAST_BLEND_BP[0]), ECO_DECEL_BP, ECO_DECEL_V)
       d = (1.0 - w) * low + w * min(coast, ECO_COAST_FLAT)  # set speed 0 <= 30 km/h: never gentler than the flat
-    w0 = np.interp(v, SET0_BLEND_BP, [0.0, 1.0])
-    d = (1.0 - w0) * np.interp(v, SET0_DECEL_BP, SET0_DECEL_V) + w0 * d
     high = HIGH_FRAC * (coast if coast is not None else np.interp(v, ECO_DECEL_BP, ECO_DECEL_V))
     w_high = np.interp(v, HIGH_BP, [0.0, 1.0])
-    return (1.0 - w_high) * d + w_high * high  # no gap / TAPER_T: the schedule's own end line (-> -0.30) is the landing
+    d = (1.0 - w_high) * d + w_high * high
+    w0 = np.interp(v, SET0_BLEND_BP, [0.0, 1.0])
+    return (1.0 - w0) * np.interp(v, SET0_DECEL_BP, SET0_DECEL_V) + w0 * d  # the schedule's own end line is the landing
 
   def decel(self, drive_mode: int, v_ego: float, v_target: float, accel_coast: float | None) -> float:
     gap = v_target - v_ego  # < 0
