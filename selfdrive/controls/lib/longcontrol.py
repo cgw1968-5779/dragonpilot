@@ -57,6 +57,12 @@ ENGAGE_ONSET_J0 = 1.0       # m/s^3 at the start of the brake
 ENGAGE_ONSET_J1 = 3.0       # m/s^3 at ENGAGE_ONSET_T
 ENGAGE_ONSET_T = 0.2        # s: the soft part
 ENGAGE_ONSET_J_STOCK = 4.0  # m/s^3 after it (stock carcontroller wind-down limit), until the request is reached
+# ENGAGE_FROM_DECEL - dppb (owner 2026-11-11, route 000001a9 22:04 bookmark "a jolt in the middle of the brake"):
+# engaged at 34 km/h 30 m behind a lead braking 44 -> 0 km/h while the car was coasting on regen at -0.75 m/s^2 (the
+# driver had just lifted off the gas). The onset ramp started from the last command, 0: the PCM dropped the regen
+# (actual -0.75 -> -0.32), then the climb to -1.65 in 0.5 s made it bite at -2.99 while -1.67 was sent. 14 engage-and-
+# brake events in the 11-04..11-11 rlogs: a release of +0.1..+0.4 in 9 of them. The onset now starts from the car's
+# current decel (min(aEgo, 0)), never firmer than the request; engaging while not slowing is unchanged.
 
 # dppb (owner 2026-11-05, exception to "never lighter than the planner" approved): "when a car cuts in, start the brake
 # soft but climb quickly to the planner's force; keep it simple". 21:53:33 at 56 km/h, accelerating +0.6, a car cut in
@@ -203,6 +209,7 @@ class LongControl:
     self.end_hold = False  # the end is held (not released) this frame
     self.end_zone = False  # this stop's end has been held
     self.engage_t = 0.0  # s since engaging
+    self.onset_from = 0.0  # engage onset start: the car's decel at the onset (never firmer than the request)
     self.onset_t: float | None = None  # s since the soft brake onset began (None: not in one)
     self.onset_done = False  # the onset ramp reached the request
     self.hold = 0.0  # <= 0: brake held beyond the planner in this engage stop
@@ -342,11 +349,15 @@ class LongControl:
          output_accel >= min(self.last_output_accel, 0.0):
         return self.brake_onset(output_accel, CS)
       self.onset_t = 0.0
+      # engaged while the car is already slowing (regen after the driver lifted off): start from that decel - from 0
+      # the PCM first drops the regen and then bites (see ENGAGE_FROM_DECEL); never firmer than the request
+      self.onset_from = max(output_accel, min(float(getattr(CS, 'aEgo', 0.0)), 0.0))
     t = self.onset_t
     self.onset_t += DT_CTRL
     if not self.onset_done:
       jerk = ENGAGE_ONSET_J0 + (ENGAGE_ONSET_J1 - ENGAGE_ONSET_J0) * t / ENGAGE_ONSET_T if t < ENGAGE_ONSET_T else ENGAGE_ONSET_J_STOCK
-      ramp = min(self.last_output_accel, 0.0) - jerk * DT_CTRL
+      base = min(self.last_output_accel, 0.0) if t > 0.0 else min(self.last_output_accel, 0.0, self.onset_from)
+      ramp = base - jerk * DT_CTRL
       if output_accel < ramp:
         return ramp
       self.onset_done = True  # request reached: the hold below from here on

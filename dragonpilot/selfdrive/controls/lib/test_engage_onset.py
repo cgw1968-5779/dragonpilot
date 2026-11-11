@@ -180,3 +180,19 @@ def test_gradual_planner_untouched():
 def test_no_onset_while_already_braking():
   outs = run_drive(lambda k: -0.5 if k < 100 else -1.5)  # braking, then a firmer request: planner as it is
   assert outs[150] == -1.5
+
+
+def test_engaged_while_slowing_starts_from_the_cars_decel():
+  # dppb 11-11 (route 1a9 22:03:50): coasting on regen at -0.75, engaged with a -1.2 request: no release to 0 first
+  LC = lc.LongControl(CP)
+  for _ in range(10):
+    LC.update(False, cs(9.4, -0.75), 0.0, False, LIM)
+  outs = [LC.update(True, cs(9.4, -0.75), -1.2, False, LIM) for _ in range(100)]
+  assert -0.80 < outs[0] <= -0.75                      # starts at the car's decel, not at 0
+  assert all(b <= a + 1e-9 for a, b in zip(outs, outs[1:]))   # only firmer, never back toward 0
+  assert all(o >= -1.2 - 1e-9 for o in outs) and outs[-1] == -1.2
+  # never firmer than a lighter request
+  LC = lc.LongControl(CP)
+  for _ in range(10):
+    LC.update(False, cs(9.4, -0.75), 0.0, False, LIM)
+  assert LC.update(True, cs(9.4, -0.75), -0.3, False, LIM) >= -0.3 - 1e-9
