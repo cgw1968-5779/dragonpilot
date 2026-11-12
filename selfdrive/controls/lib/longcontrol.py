@@ -32,7 +32,7 @@ SOFT_END_URGENT = -1.5  # m/s^2, never ease while the planner asks for more than
 # step to -0.30 is taken in the last SOFT_END_LAG.
 SOFT_END_HOLD_ACCEL = -0.40  # m/s^2
 SOFT_END_HOLD_MIN_DECEL = 0.05  # m/s^2: floor of the decel for the hold's time to the stop
-SOFT_END_HOLD_GAP = 5.7  # (11-05 owner's 4.0 m standard stop: was 5.0) m (radar dRel): only while the stop, predicted from the actual decel, ends closer than this
+SOFT_END_HOLD_GAP = 5.2  # (11-12 owner's 3.5 m stop: was 5.7; 11-05 4.0 m: was 5.0) m (radar dRel): only while the stop, predicted from the actual decel, ends closer than this
 
 # dragonpilot (dpcr, owner 2026-11-03; dppb port 2026-11-04): "at mid / low speed, the first 0.1 s of the brake on the
 # first SET / RESUME press should be softer". Engaging with a lead (or a set speed) that needs braking, the planner's
@@ -94,7 +94,7 @@ ONSET_LAG = 0.5              # s of travel before a firmer command takes effect
 ENGAGE_HOLD_MAX_T = 15.0    # s after the onset
 ENGAGE_HOLD_LEAD_V = 1.0    # m/s: lead counted as stopped below this
 ENGAGE_HOLD_LEAD_T = 0.5    # s the lead must have been stopped
-ENGAGE_HOLD_GAP = 4.0       # m (11-05 owner's 4.0 m standard stop: was 3.3)
+ENGAGE_HOLD_GAP = 3.5       # m (11-12 owner: stop at 3.5 m, was 4.0; 11-05: was 3.3)
 ENGAGE_HOLD_LAG = 0.5       # s
 ENGAGE_HOLD_V_TAIL = 12.0   # km/h: below this the stop is the normal end's
 ENGAGE_HOLD_D_TAIL = 9.0    # m the normal end takes from ENGAGE_HOLD_V_TAIL
@@ -126,7 +126,7 @@ STOP_LEVEL_V = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]                  #
 STOP_LEVEL_A = [-0.30, -0.33, -0.37, -0.45, -0.57, -0.55, -0.57, -0.69, -0.93]  # m/s^2, tncr1 sent (median), Altis end
 STOP_LEVEL_V_MID = 10.0   # km/h: top of the level line
 STOP_LEVEL_V_ARM = 12.0   # km/h: from here down to STOP_LEVEL_V_MID it blends from the planner's request to the line
-STOP_LEVEL_GAP = 4.0      # m (radar dRel): the closest the eased stop may be predicted to end (11-05: was 3.3)
+STOP_LEVEL_GAP = 3.5      # m (radar dRel): the closest the eased stop may be predicted to end (11-12 owner 3.5 m: was 4.0; 11-05: was 3.3)
 STOP_LEVEL_LAG = 0.5      # s: Cross low-speed actuator lag, travelled before an eased command takes effect
 STOP_LEVEL_LEAD_V = 1.0   # m/s: lead counted as stopped below this
 STOP_LEVEL_RATE = 1.0     # m/s^3: easing never faster than this

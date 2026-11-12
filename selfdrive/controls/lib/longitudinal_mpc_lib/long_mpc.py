@@ -79,7 +79,10 @@ LAUNCH_EXTRA = 0.5          # m beyond the gap we stopped at, so a lead creeping
 # STOP_EXTRA without a rebuild. With the stop end's gaps at 4.0 m (longcontrol), closed-loop sim of 17 engaged stops
 # (11-04/11-05, x86 MPC, Altis low-speed map): median 3.32 -> 3.94 m, 3 -> 9 within 3.5-4.5 m; the three gentle stops
 # that already end far (lead stopping with us) end ~0.5 m farther (owner chose to road test it).
-STOP_EXTRA = 0.7            # m
+# 11-12 owner: "4 m is still too far, 3.5 m is right; and follow 0.5-1 m closer below 15 km/h" -> STOP_EXTRA 0 with the
+# stop end gaps 3.5 m. Real stops since 11-06 (37): median 4.08 m; sim 17 stops 3.85 -> 3.40 (real est ~3.6 m). The same
+# offset sets the following distance: steady following 3-15 km/h (7.7-11.0 m) comes 0.7 m closer, every speed alike.
+STOP_EXTRA = 0.0            # m (11-05..11-12: 0.7)
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:

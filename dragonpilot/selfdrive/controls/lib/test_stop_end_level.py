@@ -47,10 +47,10 @@ def test_eases_to_tncr1_level_with_room():
 def test_short_room_eases_only_as_far_as_the_gap_allows():
   LC = make()
   v = 5.0 / 3.6
-  d = 4.9  # room = 4.9 - 0.69 - 4.0 = 0.2 m: needs ~4.8 m/s^2 >= STOP_LEVEL_MAX_B -> left to the planner
+  d = 4.4  # room = 4.4 - 0.69 - 3.5 = 0.2 m: needs ~4.8 m/s^2 >= STOP_LEVEL_MAX_B -> left to the planner
   outs = run(LC, 5.0, -1.0, lead(d))
   assert all(abs(o - -1.0) < 1e-9 for o in outs)  # the planner's -1.0 stays
-  d = 5.7  # room 1.0 m: needs ~0.96 m/s^2 (~-0.81 sent): eases, but not all the way to the level
+  d = 5.2  # room 1.0 m: needs ~0.96 m/s^2 (~-0.81 sent): eases, but not all the way to the level
   outs = run(make(), 5.0, -1.0, lead(d))
   room = d - v * lc.STOP_LEVEL_LAG - lc.STOP_LEVEL_GAP
   assert room < lc._level_distance(5.0)
