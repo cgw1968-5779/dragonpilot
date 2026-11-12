@@ -33,6 +33,26 @@ SOFT_END_URGENT = -1.5  # m/s^2, never ease while the planner asks for more than
 SOFT_END_HOLD_ACCEL = -0.40  # m/s^2
 SOFT_END_HOLD_MIN_DECEL = 0.05  # m/s^2: floor of the decel for the hold's time to the stop
 SOFT_END_HOLD_GAP = 5.2  # (11-12 owner's 3.5 m stop: was 5.7; 11-05 4.0 m: was 5.0) m (radar dRel): only while the stop, predicted from the actual decel, ends closer than this
+# dppb (owner 2026-11-12, "the short stops come from the end crawl, so fix the end brake - but still ease off a little in
+# the last half second to the stop"): owner-approved exception to item 0 for the END CRAWL only. Closed-loop sim of the
+# stops that end short (11-04 13:21/13:24, 11-05 09:17/09:21) and real 11-12 13:47: the middle is already firm
+# (-1.9..-2.3), the loss is below ~5 km/h, where the held -0.40 (and -0.30) is cancelled by the Altis creep (aEgo ~0) and
+# the car crawls at 1-2 km/h for 2-3 s, 1-1.5 m closer (13:47: stopped near 5.7 m, crept to 2.6 m). So while the end is
+# held (end_hold: stopped radar lead, below SOFT_END_RESET_V, stop predicted inside SOFT_END_HOLD_GAP and more than
+# SOFT_END_LAG away) and the car has not been slowing (aEgo above END_CREEP_A) for END_CREEP_T, the hold level is firmed
+# to what stops the car at STOP_LEVEL_GAP: need b = v^2 / 2(dRel - v*SOFT_END_LAG - STOP_LEVEL_GAP), command -(b +
+# END_CREEP_COMP) (the creep it has to beat), between SOFT_END_HOLD_ACCEL and END_CREEP_MAX, reached at END_CREEP_RATE.
+# Once the car slows so the stop is within SOFT_END_LAG, the existing last step eases to -0.30 (owner: lighter in the last
+# half second) and this stop is not firmed again (no two-stage). A stop that keeps slowing never crawls: unchanged.
+END_CREEP_A = -0.10       # m/s^2: aEgo above this = not slowing
+END_CREEP_T = 0.3         # s
+END_CREEP_V_MIN = 0.1     # m/s
+END_CREEP_COMP = 0.30     # m/s^2: the creep the command has to beat (steady -0.30 -> aEgo -0.03 at 1-3 km/h)
+END_CREEP_MAX = -0.70     # m/s^2: firmest crawl stop
+END_CREEP_RATE = 1.0      # m/s^3
+END_CREEP_ROOM_MIN = 0.3  # m
+END_CREEP_ENGAGE_T = 2.0  # s: not in the first seconds after engaging (engaging while creeping: the Altis already bites
+                          # ~2x the command there, 11-11 23:18:22/31 - left to the engage onset)
 
 # dragonpilot (dpcr, owner 2026-11-03; dppb port 2026-11-04): "at mid / low speed, the first 0.1 s of the brake on the
 # first SET / RESUME press should be softer". Engaging with a lead (or a set speed) that needs braking, the planner's
@@ -208,6 +228,9 @@ class LongControl:
     self.soft_end_frac = 1.0
     self.end_hold = False  # the end is held (not released) this frame
     self.end_zone = False  # this stop's end has been held
+    self.creep_t = 0.0  # s the held end has not been slowing
+    self.creep_level = 0.0  # < 0: the held end is firmed to this (end crawl)
+    self.end_released = False  # this stop's last step (to -0.30) has begun: never firmed again
     self.engage_t = 0.0  # s since engaging
     self.onset_from = 0.0  # engage onset start: the car's decel at the onset (never firmer than the request)
     self.onset_t: float | None = None  # s since the soft brake onset began (None: not in one)
@@ -269,15 +292,40 @@ class LongControl:
       self.long_control_state in (LongCtrlState.pid, LongCtrlState.stopping) and self._stopped_lead()
     self.end_hold = zone and self._end_not_yet(CS)
     self.end_zone = zone and (self.end_zone or self.end_hold)  # this stop has been held (until it is over)
+    self.end_crawl(CS, zone)
     return out
+
+  def end_crawl(self, CS, zone):
+    if not zone:
+      self.creep_t, self.creep_level, self.end_released = 0.0, 0.0, False
+      return
+    if self.end_zone and not self.end_hold:
+      self.end_released = True
+    crawl = self.end_hold and not self.end_released and CS.vEgo > END_CREEP_V_MIN and CS.aEgo > END_CREEP_A and \
+      self.engage_t >= END_CREEP_ENGAGE_T
+    self.creep_t = self.creep_t + DT_CTRL if crawl else 0.0
+    if self.creep_t >= END_CREEP_T:
+      room = self.lead.dRel - CS.vEgo * SOFT_END_LAG - STOP_LEVEL_GAP
+      b = CS.vEgo ** 2 / (2.0 * max(room, END_CREEP_ROOM_MIN))
+      level = float(np.clip(-(b + END_CREEP_COMP), END_CREEP_MAX, SOFT_END_HOLD_ACCEL))
+      self.creep_level = min(self.creep_level, level)  # within one stop it only firms
 
   def end_stop_hold(self, output_accel):
     # applied after both easings: a command firmer than the hold level is left as it is; a lighter one is eased toward
     # SOFT_END_HOLD_ACCEL at most SOFT_END_MAX_RATE (or kept at the last command if that is already lighter): never firmer
     # than the last command, never firmer than the easings' own result
+    if self.end_hold and self.creep_level < 0.0 and not self.end_released and output_accel > self.creep_level:
+      # end crawl (owner-approved exception): toward the crawl level at END_CREEP_RATE either way
+      last = self.last_output_accel
+      return float(np.clip(self.creep_level, last - END_CREEP_RATE * DT_CTRL, last + END_CREEP_RATE * DT_CTRL))
     if self.end_hold and output_accel > SOFT_END_HOLD_ACCEL:
       return min(output_accel, max(min(self.last_output_accel + SOFT_END_MAX_RATE * DT_CTRL, SOFT_END_HOLD_ACCEL),
                                    self.last_output_accel))
+    if self.end_zone and not self.end_hold and self.creep_level < 0.0 and self.last_output_accel < SOFT_END_ACCEL:
+      # the last SOFT_END_LAG after an end-crawl firming: ease to -0.30 at END_CREEP_RATE (no sudden release), never
+      # firmer than the last command (owner: lighter in the last half second to the stop)
+      ramp = min(self.last_output_accel + END_CREEP_RATE * DT_CTRL, SOFT_END_ACCEL)
+      return min(output_accel, ramp) if output_accel < self.last_output_accel else ramp
     if self.end_zone and not self.end_hold and output_accel > SOFT_END_ACCEL:
       # the last SOFT_END_LAG: to -0.30, as smooth as the easing, not lighter
       return min(output_accel, max(self.last_output_accel + SOFT_END_MAX_RATE * DT_CTRL, SOFT_END_ACCEL))

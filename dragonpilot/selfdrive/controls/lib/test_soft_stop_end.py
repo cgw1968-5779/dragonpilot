@@ -128,3 +128,41 @@ def test_no_hold_without_a_stopped_lead():
     # the plain soft end: lighter than the hold level while the held stop is still at it
     assert any(o > lc.SOFT_END_HOLD_ACCEL + 0.03 for v, o in outs if v > 0.27)
   assert all(o <= lc.SOFT_END_HOLD_ACCEL + 1e-9 for v, o in held if 0.27 < v < 0.5)
+
+
+def crawl_stop(engage_t=10.0, d0=6.0, v0=0.8):
+  """the Altis crawls on the creep (aEgo ~0) unless the command is firmer than -0.55; the lead stopped d0 ahead"""
+  LC = lc.LongControl(CP)
+  LC.engage_t = engage_t
+  v, x, outs = v0, 0.0, []
+  lag = int(0.5 / DT_CTRL)  # Altis low-speed brake lag
+  for k in range(3000):
+    LC.lead = SimpleNamespace(status=True, dRel=d0 - x, vLead=0.0, aLeadK=0.0)
+    seen = outs[-lag][1] if len(outs) >= lag else 0.0
+    a_car = -0.6 if seen < -0.55 else 0.0
+    out = LC.update(True, cs(v, a_car if v > 0 else 0.0, standstill=v <= 0), -0.1, False, LIM)
+    outs.append((v, out, d0 - x))
+    v = max(0.0, v + a_car * DT_CTRL)
+    x += v * DT_CTRL
+    if v <= 0:
+      break
+  return outs
+
+
+def test_end_crawl_is_firmed_smoothly_and_eased_in_the_last_half_second():
+  outs = crawl_stop()
+  cmds = [o for _, o, _ in outs]
+  assert min(cmds) <= -0.55                      # firmed past the creep
+  assert min(cmds) >= lc.END_CREEP_MAX - 1e-9    # never beyond the crawl cap
+  steps = [abs(b - a) for a, b in zip(cmds, cmds[1:])]
+  assert max(steps) <= lc.END_CREEP_RATE * DT_CTRL + 1e-9   # no bite, no sudden release
+  assert outs[-1][0] < 0.01 and outs[-1][2] > lc.STOP_LEVEL_GAP  # it stops, short of the lead
+  assert cmds[-1] > min(cmds) + 0.1              # eased off before the stop (owner: lighter in the last half second)
+  i = cmds.index(min(cmds))
+  assert all(b >= a - 1e-9 for a, b in zip(cmds[i:], cmds[i + 1:]))  # once easing, never firmed again (no two-stage)
+
+
+def test_end_crawl_not_right_after_engaging():
+  outs = crawl_stop(engage_t=0.0)
+  early = [o for (v, o, _), k in zip(outs, range(len(outs))) if k * DT_CTRL < lc.END_CREEP_ENGAGE_T - 0.5]
+  assert min(early) > -0.45  # left to the engage onset / the hold level
