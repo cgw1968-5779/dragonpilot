@@ -83,6 +83,20 @@ LAUNCH_EXTRA = 0.5          # m beyond the gap we stopped at, so a lead creeping
 # stop end gaps 3.5 m. Real stops since 11-06 (37): median 4.08 m; sim 17 stops 3.85 -> 3.40 (real est ~3.6 m). The same
 # offset sets the following distance: steady following 3-15 km/h (7.7-11.0 m) comes 0.7 m closer, every speed alike.
 STOP_EXTRA = 0.0            # m (11-05..11-12: 0.7)
+# 11-13 owner: "drop yesterday's closer following below 15 km/h; instead, below 30 km/h - except when the speed has been
+# coming down continuously from above 31 km/h - follow 1 m closer, with all the smooth-stop measures as before". The stop
+# target stays STOP_EXTRA (3.5 m stop end); only a MOVING lead gets a following offset, blended in with the lead's own
+# speed so a lead that stops hands the MPC the unchanged stop target, and every change is rate limited:
+#  - normal: the 11-05..11-12 following distance (lead seen FOLLOW_EXTRA closer);
+#  - low (<= 30 km/h, not on a continuous slow-down from > 31 km/h): LOW_CLOSER nearer than that. The slow-down from
+#    > 31 km/h ends once we stop, or speed back up LOW_RISE above the lowest speed since; > 31 km/h ends low.
+FOLLOW_EXTRA = 0.7          # m
+LOW_CLOSER = 1.0            # m
+LOW_V_ON = 30.0 / 3.6       # m/s
+LOW_V_OFF = 31.0 / 3.6      # m/s
+LOW_RISE = 1.0              # m/s
+FOLLOW_VLEAD = (0.3, 4.0)   # m/s: lead at/below the first is stopped (stop target), at/above the second is moving
+FOLLOW_RATE = 0.25          # m/s: offset change rate
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
@@ -243,6 +257,10 @@ class LongitudinalMpc:
     self.dt = dt
     self.launch_t = 0.0
     self.launch_offset = 0.0
+    self.follow_offset = None
+    self.from_high = False
+    self.low = False
+    self.v_min = 0.0
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.cruise_profile = None  # dragonpilot hook (cruise_decel: the owner's set-0 speed curve, None = stock)
     self.reset()
@@ -356,6 +374,27 @@ class LongitudinalMpc:
         self.launch_t = 0.0
     return self.launch_offset
 
+  def follow_gap(self, lead, v_ego):
+    if v_ego > LOW_V_OFF:
+      self.from_high, self.low, self.v_min = True, False, v_ego
+    elif self.from_high:
+      self.v_min = min(self.v_min, v_ego)
+      if v_ego < LAUNCH_EGO_V or v_ego > self.v_min + LOW_RISE:
+        self.from_high = False
+    if v_ego <= LOW_V_ON and not self.from_high:
+      self.low = True
+    if not lead.status:
+      self.follow_offset = None
+      return 0.0
+    w = float(np.clip((lead.vLead - FOLLOW_VLEAD[0]) / (FOLLOW_VLEAD[1] - FOLLOW_VLEAD[0]), 0.0, 1.0))
+    target = w * ((LOW_CLOSER if self.low else 0.0) - FOLLOW_EXTRA)
+    if self.follow_offset is None:
+      self.follow_offset = target
+    else:
+      step = FOLLOW_RATE * self.dt
+      self.follow_offset = float(np.clip(target, self.follow_offset - step, self.follow_offset + step))
+    return self.follow_offset
+
   def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
     t_follow = get_T_FOLLOW(personality)
     v_ego = self.x0[1]
@@ -364,6 +403,9 @@ class LongitudinalMpc:
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)
     lead_xv_0[:, 0] += self.launch_gap(radarstate.leadOne, v_ego)
+    follow = self.follow_gap(radarstate.leadOne, v_ego)  # dragonpilot hook
+    lead_xv_0[:, 0] += follow
+    lead_xv_1[:, 0] += follow
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
