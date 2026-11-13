@@ -1,4 +1,4 @@
-# dppb (owner 2026-11-13): below 30 km/h follow 1 m closer, except on a continuous slow-down from above 31 km/h;
+# dppb (owner 2026-11-13): below 39 km/h follow 1 m closer, except on a continuous slow-down from above 40 km/h;
 # a stopped lead always gets the unchanged stop target, and every change of the offset is rate limited
 from types import SimpleNamespace
 
@@ -34,13 +34,13 @@ def test_low_speed_following_is_1m_closer():
   assert abs(out[-1] - LOW) < 1e-9 and abs(out[0] - LOW) < 1e-9   # a new lead: no ramp needed
 
 
-def test_above_31_is_the_old_following():
+def test_above_40_is_the_old_following():
   m = mpc()
-  out = run(m, [40 / 3.6] * 100, vl=11.0)
+  out = run(m, [50 / 3.6] * 100, vl=13.0)
   assert abs(out[-1] + lm.FOLLOW_EXTRA) < 1e-9
 
 
-def test_slow_down_from_above_31_keeps_the_old_following():
+def test_slow_down_from_above_40_keeps_the_old_following():
   m = mpc()
   vs = list(np.linspace(50, 8, 200) / 3.6)
   out = run(m, vs, vl=None)
@@ -66,18 +66,18 @@ def test_a_stop_ends_the_slow_down_and_a_stopped_lead_has_the_stop_target():
   assert out[-1] > 0.0 and np.max(np.abs(np.diff(out))) <= lm.FOLLOW_RATE * DT + 1e-12
 
 
-def test_speeding_past_31_returns_to_the_old_following_smoothly():
+def test_speeding_past_40_returns_to_the_old_following_smoothly():
   m = mpc()
   run(m, [20 / 3.6] * 50)
-  out = run(m, list(np.linspace(20, 40, 200) / 3.6), vl=11.0)
+  out = run(m, list(np.linspace(20, 50, 300) / 3.6), vl=13.0)
   assert not m.low and abs(out[-1] + lm.FOLLOW_EXTRA) < 1e-9
   assert np.max(np.abs(np.diff(out))) <= lm.FOLLOW_RATE * DT + 1e-12
 
 
-def test_hysteresis_30_31():
+def test_hysteresis_39_40():
   m = mpc()
   run(m, [20 / 3.6] * 10)
-  run(m, [30.6 / 3.6] * 50)
+  run(m, [39.6 / 3.6] * 50)
   assert m.low
 
 

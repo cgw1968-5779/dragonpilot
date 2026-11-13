@@ -90,10 +90,11 @@ STOP_EXTRA = 0.0            # m (11-05..11-12: 0.7)
 #  - normal: the 11-05..11-12 following distance (lead seen FOLLOW_EXTRA closer);
 #  - low (<= 30 km/h, not on a continuous slow-down from > 31 km/h): LOW_CLOSER nearer than that. The slow-down from
 #    > 31 km/h ends once we stop, or speed back up LOW_RISE above the lowest speed since; > 31 km/h ends low.
+# 11-13 owner (later): "raise the switch point to 39 km/h" -> low at <= 39 km/h, slow-downs from > 40 km/h excluded.
 FOLLOW_EXTRA = 0.7          # m
 LOW_CLOSER = 1.0            # m
-LOW_V_ON = 30.0 / 3.6       # m/s
-LOW_V_OFF = 31.0 / 3.6      # m/s
+LOW_V_ON = 39.0 / 3.6       # m/s (11-13 first version: 30)
+LOW_V_OFF = 40.0 / 3.6      # m/s (11-13 first version: 31)
 LOW_RISE = 1.0              # m/s
 FOLLOW_VLEAD = (0.3, 4.0)   # m/s: lead at/below the first is stopped (stop target), at/above the second is moving
 FOLLOW_RATE = 0.25          # m/s: offset change rate
